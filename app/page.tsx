@@ -7,7 +7,7 @@ import { FilteredUsersTable } from '@/components/dashboard/FilteredUsersTable'
 import { ErrorToast } from '@/components/ErrorToast'
 import { useUsers } from '@/hooks/useUsers'
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { MapPin, Filter, X, Loader2, Search, ArrowUpDown } from 'lucide-react'
+import { MapPin, Filter, X, Loader2, Search, ArrowUpDown, Users, UserCheck, UserX } from 'lucide-react'
 import { CustomDropdown } from '@/components/dashboard/CustomDropdown'
 import { reverseGeocode } from '@/lib/geocoding'
 
@@ -26,9 +26,17 @@ const UserMap = dynamic(() => import('@/components/dashboard/UserMap').then(mod 
 
 // Helper to extract coordinates from a user document
 function extractCoords(user: any): { latitude: number; longitude: number } | null {
+  // Case 1: Direct latitude/longitude fields
   if (typeof user.latitude === 'number' && typeof user.longitude === 'number') {
     return { latitude: user.latitude, longitude: user.longitude }
   }
+  
+  // Case 2: Nested location map (location.latitude, location.longitude)
+  if (user.location && typeof user.location.latitude === 'number' && typeof user.location.longitude === 'number') {
+    return { latitude: user.location.latitude, longitude: user.location.longitude }
+  }
+  
+  // Case 3: String field like "28.536761, 77.381319"
   if (typeof user.userLocation === 'string') {
     const parts = user.userLocation.split(',')
     if (parts.length === 2) {
@@ -52,6 +60,29 @@ export default function Dashboard() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
   const { users, loading, error: usersError } = useUsers()
+
+  // Calculate user statistics
+  const userStats = useMemo(() => {
+    const totalUsers = users.length
+    const subscribedUsers = users.filter((user: any) => {
+      // Check if user has any FCM token field
+      const hasToken = 
+        (user.fcmToken && typeof user.fcmToken === 'string' && user.fcmToken.trim() !== '') ||
+        (user.pushToken && typeof user.pushToken === 'string' && user.pushToken.trim() !== '') ||
+        (user.notificationToken && typeof user.notificationToken === 'string' && user.notificationToken.trim() !== '') ||
+        (user.fcm_token && typeof user.fcm_token === 'string' && user.fcm_token.trim() !== '') ||
+        (user.push_token && typeof user.push_token === 'string' && user.push_token.trim() !== '') ||
+        (user.deviceToken && typeof user.deviceToken === 'string' && user.deviceToken.trim() !== '')
+      return hasToken
+    }).length
+    const unsubscribedUsers = totalUsers - subscribedUsers
+    
+    return {
+      total: totalUsers,
+      subscribed: subscribedUsers,
+      unsubscribed: unsubscribedUsers,
+    }
+  }, [users])
 
   // Users enriched with state/city resolved from latitude/longitude
   const [geoUsers, setGeoUsers] = useState<any[]>([])
@@ -163,8 +194,8 @@ export default function Dashboard() {
       <div className="min-h-screen bg-background">
         <Sidebar />
         <TopBar />
-        <main className="ml-0 lg:ml-64 pt-20 p-4 lg:p-6">
-          <div className="max-w-7xl mx-auto">
+        <main className="ml-0 lg:ml-64 p-4 lg:p-6">
+          <div className="max-w-7xl mx-auto mt-20">
             <div className="flex items-center justify-center h-[600px]">
               <div className="text-center">
                 <Loader2 className="w-8 h-8 text-purple-500 animate-spin mx-auto mb-4" />
@@ -183,10 +214,10 @@ export default function Dashboard() {
       <Sidebar />
       <TopBar />
 
-      <main className="ml-0 lg:ml-64 pt-20 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto">
+      <main className="ml-0 lg:ml-64 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto mt-20">
           {/* Header */}
-          <div className="mb-6 pt-6">
+          <div className="mb-6">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
               <div>
                 <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">
@@ -195,6 +226,48 @@ export default function Dashboard() {
                 <p className="text-white/60 text-sm">
                   Monitor users across locations in real-time
                 </p>
+              </div>
+            </div>
+          </div>
+
+          {/* User Statistics Tiles */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            {/* Total Users */}
+            <div className="bg-card rounded-2xl p-6 border border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white/60 text-sm mb-1">Total Users</p>
+                  <p className="text-3xl font-bold text-white">{userStats.total}</p>
+                </div>
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center border border-purple-500/30">
+                  <Users className="w-6 h-6 text-purple-400" />
+                </div>
+              </div>
+            </div>
+
+            {/* Subscribed Users */}
+            <div className="bg-card rounded-2xl p-6 border border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white/60 text-sm mb-1">Subscribed Users</p>
+                  <p className="text-3xl font-bold text-white">{userStats.subscribed}</p>
+                </div>
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 flex items-center justify-center border border-green-500/30">
+                  <UserCheck className="w-6 h-6 text-green-400" />
+                </div>
+              </div>
+            </div>
+
+            {/* Unsubscribed Users */}
+            <div className="bg-card rounded-2xl p-6 border border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white/60 text-sm mb-1">Unsubscribed Users</p>
+                  <p className="text-3xl font-bold text-white">{userStats.unsubscribed}</p>
+                </div>
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500/20 to-red-500/20 flex items-center justify-center border border-orange-500/30">
+                  <UserX className="w-6 h-6 text-orange-400" />
+                </div>
               </div>
             </div>
           </div>

@@ -280,8 +280,8 @@ export default function UserDetailPage() {
       <Sidebar />
       <TopBar />
       
-      <main className="ml-0 lg:ml-64 pt-16 p-4 lg:p-6">
-        <div className="max-w-7xl mx-auto">
+      <main className="ml-0 lg:ml-64 p-4 lg:p-6">
+        <div className="max-w-7xl mx-auto mt-20">
           {/* Header */}
           <div className="mb-6">
             <button

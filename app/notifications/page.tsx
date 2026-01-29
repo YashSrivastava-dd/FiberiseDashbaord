@@ -9,8 +9,8 @@ export default function NotificationsPage() {
     <div className="min-h-screen bg-background">
       <Sidebar />
       <TopBar />
-      <main className="ml-0 lg:ml-64 pt-20 p-4 lg:p-6">
-        <div className="max-w-4xl mx-auto">
+      <main className="ml-0 lg:ml-64 p-4 lg:p-6">
+        <div className="max-w-4xl mx-auto mt-20">
           <NotificationPush />
         </div>
       </main>

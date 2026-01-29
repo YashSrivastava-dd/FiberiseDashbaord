@@ -248,8 +248,8 @@ export function NotificationPush() {
             ) : (
               <>
                 <option value="">Select a user token...</option>
-                {tokens.map((tokenInfo) => (
-                  <option key={tokenInfo.token} value={tokenInfo.token}>
+                {tokens.map((tokenInfo, index) => (
+                  <option key={`${tokenInfo.userId || 'user'}-${index}`} value={tokenInfo.token}>
                     {tokenInfo.userName} ({tokenInfo.userId})
                   </option>
                 ))}

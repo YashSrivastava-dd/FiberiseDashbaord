@@ -35,12 +35,17 @@ function UserMapComponent({
 
   // Helper to extract coordinates from user document (memoized)
   const getUserCoordinates = useCallback((user: any): { latitude: number; longitude: number } | null => {
-    // Case 1: separate latitude / longitude fields
+    // Case 1: Direct latitude/longitude fields
     if (typeof user.latitude === 'number' && typeof user.longitude === 'number') {
       return { latitude: user.latitude, longitude: user.longitude }
     }
 
-    // Case 2: string field like "28.536761, 77.381319"
+    // Case 2: Nested location map (location.latitude, location.longitude)
+    if (user.location && typeof user.location.latitude === 'number' && typeof user.location.longitude === 'number') {
+      return { latitude: user.location.latitude, longitude: user.location.longitude }
+    }
+
+    // Case 3: String field like "28.536761, 77.381319"
     if (typeof user.userLocation === 'string') {
       const parts = user.userLocation.split(',')
       if (parts.length === 2) {
