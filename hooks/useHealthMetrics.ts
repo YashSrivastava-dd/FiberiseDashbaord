@@ -757,9 +757,9 @@ export function useHealthMetrics(userId: string | null) {
           if (values.length === 0) return
           
           if (metricType === 'steps') {
-            merged.steps = values.reduce((a, b) => a + b, 0)
+            merged.steps = values.reduce((a: number, b: number) => a + b, 0)
           } else {
-            const avg = values.reduce((a, b) => a + b, 0) / values.length
+            const avg = values.reduce((a: number, b: number) => a + b, 0) / values.length
             const key = metricType as keyof MergedHealthData
             if (key !== 'date' && key !== 'timestamp') {
               (merged as any)[key] = avg
@@ -819,23 +819,23 @@ export function useHealthMetrics(userId: string | null) {
 
       if (dayData.length === 0) return
 
-      const values = dayData.map((d) => d.value).filter((v) => !isNaN(v))
+      const values = dayData.map((d: HealthMetricData) => d.value).filter((v: number) => !isNaN(v))
 
       switch (metricType) {
         case 'blood_oxygen':
           stats.blood_oxygen.values = values
           stats.blood_oxygen.min = Math.min(...values)
           stats.blood_oxygen.max = Math.max(...values)
-          stats.blood_oxygen.avg = values.reduce((a, b) => a + b, 0) / values.length
+          stats.blood_oxygen.avg = values.reduce((a: number, b: number) => a + b, 0) / values.length
           break
         case 'sleep':
           stats.sleep.values = values
-          stats.sleep.total = values.reduce((a, b) => a + b, 0)
+          stats.sleep.total = values.reduce((a: number, b: number) => a + b, 0)
           break
         case 'stress':
           stats.stress.values = values
-          stats.stress.avg = values.reduce((a, b) => a + b, 0) / values.length
-          stats.stress.peaks = values.filter((v) => v > stats.stress.avg * 1.5)
+          stats.stress.avg = values.reduce((a: number, b: number) => a + b, 0) / values.length
+          stats.stress.peaks = values.filter((v: number) => v > stats.stress.avg * 1.5)
           break
         case 'hrv':
           stats.hrv.values = values
@@ -846,12 +846,12 @@ export function useHealthMetrics(userId: string | null) {
         case 'heart_rate':
           stats.heart_rate.values = values
           stats.heart_rate.resting = Math.min(...values)
-          stats.heart_rate.avg = values.reduce((a, b) => a + b, 0) / values.length
+          stats.heart_rate.avg = values.reduce((a: number, b: number) => a + b, 0) / values.length
           stats.heart_rate.peak = Math.max(...values)
           break
         case 'steps':
           stats.steps.values = values
-          stats.steps.total = values.reduce((a, b) => a + b, 0)
+          stats.steps.total = values.reduce((a: number, b: number) => a + b, 0)
           break
       }
     })

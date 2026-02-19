@@ -26,7 +26,7 @@ export async function getFirestoreFcmTokens(): Promise<FirestoreTokenInfo[]> {
     const tokens: FirestoreTokenInfo[] = []
 
     usersSnapshot.forEach((doc) => {
-      const user = { id: doc.id, ...doc.data() }
+      const user = { id: doc.id, ...doc.data() } as Record<string, unknown>
       
       // Check multiple possible field names for FCM token
       const possibleFields = [
@@ -44,9 +44,9 @@ export async function getFirestoreFcmTokens(): Promise<FirestoreTokenInfo[]> {
         const tokenValue = user[field]
         if (tokenValue && typeof tokenValue === 'string' && tokenValue.trim() !== '') {
           tokens.push({
-            userId: user.id || user.phone || '',
+            userId: String(user.id ?? user.phone ?? ''),
             token: tokenValue,
-            userName: user.name || user.email || user.phone || 'Unknown User',
+            userName: String(user.name ?? user.email ?? user.phone ?? 'Unknown User'),
           })
           break // Found token, move to next user
         }

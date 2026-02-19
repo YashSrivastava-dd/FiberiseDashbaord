@@ -46,8 +46,10 @@ export function useSteps(userId: string | null) {
         
         // Parse step data for each document
         const parsedSteps = snapshot.docs.map((doc) => {
-          const data = doc.data()
-          const stepData = parseBleStepDetails(data.Step_24 || data[Object.keys(data).find((k: string) => k.includes('Step'))] || '')
+          const data = doc.data() as Record<string, unknown>
+          const stepKey = Object.keys(data).find((k: string) => k.includes('Step'))
+          const stepValue = stepKey != null ? data[stepKey] : ''
+          const stepData = parseBleStepDetails((data.Step_24 ?? stepValue ?? '') as string)
           return {
             id: doc.id,
             ...data,

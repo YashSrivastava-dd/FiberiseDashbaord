@@ -221,8 +221,8 @@ async function fetchUserMetrics(userId: string, date: string = getTodayDateStrin
 
     // Calculate calories burned (often derived from steps or activity)
     // Rough estimate: 0.04 calories per step
-    if (metrics.steps > 0 && metrics.caloriesBurned === 0) {
-      metrics.caloriesBurned = Math.round(metrics.steps * 0.04)
+    if ((metrics.steps ?? 0) > 0 && (metrics.caloriesBurned ?? 0) === 0) {
+      metrics.caloriesBurned = Math.round((metrics.steps ?? 0) * 0.04)
     }
 
     // Try alternative metrics structure: metrics/{userId}/daily/{date}
@@ -335,18 +335,18 @@ export async function broadcastPersonalizedNotifications(
             // Fetch user metrics
             const metrics = await fetchUserMetrics(user.id, today)
 
-            // Calculate personalized data
-            const personalizedData = calculatePersonalizedData(user, metrics)
+            // Calculate personalized data (use empty metrics if null)
+            const personalizedData = calculatePersonalizedData(user, metrics ?? {})
 
             // Debug logging
             console.log(`📊 User ${user.id} (${user.name}):`, {
               fcmToken: user.fcmToken ? 'Present' : 'Missing',
-              steps: metrics.steps,
-              caloriesBurned: metrics.caloriesBurned,
-              caloriesIntake: metrics.caloriesIntake,
-              sleepHours: metrics.sleepHours,
-              stress: metrics.stress,
-              hrv: metrics.hrv,
+              steps: metrics?.steps,
+              caloriesBurned: metrics?.caloriesBurned,
+              caloriesIntake: metrics?.caloriesIntake,
+              sleepHours: metrics?.sleepHours,
+              stress: metrics?.stress,
+              hrv: metrics?.hrv,
               hasValidData: personalizedData.hasValidData,
               hasMetrics: personalizedData.hasMetrics,
             })
@@ -446,8 +446,8 @@ export async function broadcastPersonalizedNotifications(
       const batchStartIndex = batchIndex * batchSize
 
       try {
-        // Convert to multicast format
-        const tokens = batch.map((msg) => msg.token)
+        // Convert to multicast format (our messages are token-based)
+        const tokens = batch.map((msg) => (msg as admin.messaging.TokenMessage).token)
         const multicastMessage: admin.messaging.MulticastMessage = {
           tokens,
           notification: {
