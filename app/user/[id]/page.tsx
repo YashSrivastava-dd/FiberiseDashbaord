@@ -183,6 +183,27 @@ export default function UserDetailPage() {
     }
   }, [metrics, selectedDay])
 
+  const sleepSessions = useMemo(() => {
+    const sessions: { date: string; start: Date; end: Date; hours: number }[] = []
+    metrics.sleep.forEach((item: any) => {
+      if (!item.sleepStart || !item.sleepEnd) return
+      const start = new Date(item.sleepStart)
+      const end = new Date(item.sleepEnd)
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return
+      const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60)
+      const dateKey = start.toISOString().split('T')[0]
+      const existingIndex = sessions.findIndex((s) => s.date === dateKey)
+      if (existingIndex >= 0) {
+        if (hours > sessions[existingIndex].hours) {
+          sessions[existingIndex] = { date: dateKey, start, end, hours }
+        }
+      } else {
+        sessions.push({ date: dateKey, start, end, hours })
+      }
+    })
+    return sessions.sort((a, b) => b.start.getTime() - a.start.getTime())
+  }, [metrics.sleep])
+
   // Handle date click from merged data table
   const handleDateClick = useCallback((date: Date) => {
     setSelectedDateForHourly(date)
@@ -403,6 +424,39 @@ export default function UserDetailPage() {
           )}
 
 
+
+          {/* Sleep Sessions (day wise) */}
+          <div className="bg-card rounded-2xl p-6 border border-white/10 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-xs text-purple-300">
+                  Zz
+                </span>
+                <h3 className="text-white font-semibold text-sm">Sleep Sessions</h3>
+              </div>
+              <span className="text-white/40 text-xs">Last {Math.min(7, sleepSessions.length)} day(s)</span>
+            </div>
+            {sleepSessions.length === 0 ? (
+              <p className="text-white/50 text-sm">No sleep data available.</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                {sleepSessions.slice(0, 14).map((s) => (
+                  <div key={s.date} className="flex items-center justify-between text-sm py-1.5 border-b border-white/5 last:border-0">
+                    <div className="text-white/70">
+                      {new Date(s.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-white/70">
+                      <span>Sleep: {new Date(s.start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span>Wake: {new Date(s.end).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-200">
+                        {s.hours.toFixed(1)} hrs
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Daily In-Depth View */}
           {selectedDay && dailyStats && (

@@ -4,10 +4,11 @@ import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, Bell } from 'lucide-react'
+import { LayoutDashboard, Bell, ShoppingBag } from 'lucide-react'
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', href: '/' },
+  { icon: ShoppingBag, label: 'Orders', href: '/orders' },
   { icon: Bell, label: 'Advertisements', href: '/notifications' },
 ]
 
@@ -27,7 +28,7 @@ export function Sidebar() {
           {!collapsed && (
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-blue-500"></div>
-              <span className="text-white font-semibold text-sm">Orbix Studio</span>
+              <span className="text-white font-semibold text-sm">Fiberise Fit</span>
             </div>
           )}
           <button

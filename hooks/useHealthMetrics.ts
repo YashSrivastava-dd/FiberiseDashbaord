@@ -564,6 +564,8 @@ export function useHealthMetrics(userId: string | null) {
                   deepDuration: sleepData.deepDuration,
                   awakeDuration: sleepData.awakeDuration,
                   rapidDuration: sleepData.rapidDuration,
+                  sleepStart: sleepStart.toISOString(),
+                  sleepEnd: sleepEnd.toISOString(),
                   ...data,
                 })
               }
