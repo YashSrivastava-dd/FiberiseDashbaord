@@ -48,7 +48,6 @@ export async function POST(req: NextRequest) {
       data?.response?.label_url ??
       data?.print_url ??
       data?.url ??
-      (Array.isArray(data?.not_created) ? null : null) ??
       (typeof data?.data === 'string' ? data.data : undefined)
 
     if (!labelUrl) {
