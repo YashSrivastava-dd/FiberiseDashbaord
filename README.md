@@ -121,7 +121,17 @@ All endpoints use Firebase Firestore REST API:
 
 ## Environment Variables
 
-No environment variables needed. Token is stored in `localStorage`.
+Add these to `.env`:
+
+- `WELLNESS_API_BASE_URL` - Base URL for the wellness app backend (used by support tickets proxy route).
+
+Example:
+
+```bash
+WELLNESS_API_BASE_URL=https://your-wellness-app-domain.com
+```
+
+Firebase token is still stored in `localStorage` for Firestore-based dashboard sections.
 
 ## Firestore Security Rules
 
