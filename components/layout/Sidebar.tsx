@@ -4,11 +4,12 @@ import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, Bell, ShoppingBag, Ticket } from 'lucide-react'
+import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus } from 'lucide-react'
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', href: '/' },
   { icon: ShoppingBag, label: 'Orders', href: '/orders' },
+  { icon: PackagePlus, label: 'Create Order', href: '/shiprocket/create-order' },
   { icon: Ticket, label: 'Support Tickets', href: '/tickets' },
   { icon: Bell, label: 'Advertisements', href: '/notifications' },
 ]
