@@ -3,6 +3,9 @@ const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['react-map-gl'],
   
+  // Allow node-cron in server-side code
+  serverExternalPackages: ['node-cron'],
+  
   // Performance optimizations
   compress: true,
   poweredByHeader: false,
