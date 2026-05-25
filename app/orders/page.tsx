@@ -32,7 +32,8 @@ import {
   CreditCard,
   ShoppingCart,
   ArrowLeft,
-  Filter
+  Filter,
+  Trash2
 } from 'lucide-react'
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -142,6 +143,10 @@ export default function ShiprocketDashboardPage() {
   const [currentTab, setCurrentTab] = useState<'new' | 'ready_to_ship' | 'pickups_manifests' | 'in_transit' | 'delivered' | 'rto' | 'all'>('new')
   const [manifestSubtab, setManifestSubtab] = useState<'pickup_ids' | 'manifests'>('pickup_ids')
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState<number>(1)
+  const ORDERS_PER_PAGE = 50
+
   // Search & Basic Sorting States
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
@@ -228,58 +233,12 @@ export default function ShiprocketDashboardPage() {
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Failed to fetch Shopify orders')
 
-        // We enrich order data with local state properties so the Shiprocket logistics cycles operate fully in state
-        const enriched: ShopifyOrder[] = (data.orders || []).map((o: any, index: number) => {
-          // Distribute initial orders across tabs for demonstration and premium completeness
-          let localFulfillments = o.fulfillments || []
-          let localFulfillmentStatus = o.fulfillment_status
-
-          if (index === 0 || index === 4) {
-            // New orders
-            localFulfillmentStatus = null
-            localFulfillments = []
-          } else if (index === 1) {
-            // Ready to ship
-            localFulfillmentStatus = 'fulfilled'
-            localFulfillments = [{
-              id: 9901,
-              status: 'success',
-              tracking_number: 'SRSC5388306500',
-              tracking_company: 'Ekart Logistics',
-              tracking_url: '#',
-              shipment_status: 'pickup_scheduled',
-              created_at: new Date().toISOString()
-            }]
-          } else if (index === 2) {
-            // In Transit
-            localFulfillmentStatus = 'fulfilled'
-            localFulfillments = [{
-              id: 9902,
-              status: 'success',
-              tracking_number: 'SF3391922857KR',
-              tracking_company: 'Shadowfax Surface',
-              tracking_url: '#',
-              shipment_status: 'in_transit',
-              created_at: new Date().toISOString()
-            }]
-          } else if (index === 3 || index === 5) {
-            // Delivered
-            localFulfillmentStatus = 'fulfilled'
-            localFulfillments = [{
-              id: 9903,
-              status: 'success',
-              tracking_number: '19041918021844',
-              tracking_company: 'Delhivery Surface',
-              tracking_url: '#',
-              shipment_status: 'delivered',
-              created_at: new Date().toISOString()
-            }]
-          }
-
+        // We preserve real order data and fulfillments fetched from Shopify & Shiprocket
+        const enriched: ShopifyOrder[] = (data.orders || []).map((o: any) => {
           return {
             ...o,
-            fulfillment_status: localFulfillmentStatus,
-            fulfillments: localFulfillments
+            fulfillment_status: o.fulfillment_status || null,
+            fulfillments: o.fulfillments || []
           }
         })
 
@@ -342,6 +301,28 @@ export default function ShiprocketDashboardPage() {
       window.removeEventListener('shopify_view_live_order', handleViewLiveOrder)
     }
   }, [])
+
+  // Reset pagination on filter or search changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [
+    currentTab,
+    searchQuery,
+    sortOrder,
+    datePreset,
+    startDate,
+    endDate,
+    filterChannel,
+    filterCourier,
+    filterPickupLocation,
+    filterWeightClass,
+    filterRtoRisk,
+    filterPaymentType,
+    financialFilter,
+    filterFulfillmentStatus,
+    minPrice,
+    maxPrice
+  ])
 
 
   // ── Logistics Actions Simulations ──
@@ -409,6 +390,63 @@ export default function ShiprocketDashboardPage() {
   const triggerNotification = (type: 'success' | 'error', text: string) => {
     setActionMessage({ type, text })
     setTimeout(() => setActionMessage(null), 5000)
+  }
+
+  // ── Delete Order ──
+  const [deletingOrderId, setDeletingOrderId] = useState<number | null>(null)
+
+  const handleDeleteOrder = async (orderId: number) => {
+    if (!window.confirm('Are you sure you want to permanently delete this order?')) return
+
+    try {
+      setDeletingOrderId(orderId)
+      const res = await fetch(`/api/shopify/orders/${orderId}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to delete order')
+
+      // Remove from frontend state
+      setOrders((prev) => prev.filter((o) => o.id !== orderId))
+      setActiveDetailOrder(null)
+      triggerNotification('success', 'Order deleted successfully.')
+    } catch (err: any) {
+      triggerNotification('error', err.message || 'Error deleting order.')
+    } finally {
+      setDeletingOrderId(null)
+    }
+  }
+
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+
+  const handleBulkDelete = async () => {
+    const selectedIds = Object.keys(selectedOrders)
+      .map(Number)
+      .filter((id) => selectedOrders[id])
+
+    if (selectedIds.length === 0) return
+
+    if (!window.confirm(`Are you sure you want to permanently delete the ${selectedIds.length} selected orders?`)) return
+
+    try {
+      setBulkDeleting(true)
+      const res = await fetch('/api/shopify/orders', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedIds }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to bulk delete orders')
+
+      // Remove deleted orders from frontend state
+      setOrders((prev) => prev.filter((o) => !selectedIds.includes(o.id)))
+      setSelectedOrders({})
+      triggerNotification('success', `Successfully deleted ${selectedIds.length} orders.`)
+    } catch (err: any) {
+      triggerNotification('error', err.message || 'Error bulk deleting orders.')
+    } finally {
+      setBulkDeleting(false)
+    }
   }
 
   // ── Phone Masking Toggler ──
@@ -639,6 +677,12 @@ export default function ShiprocketDashboardPage() {
       const dateB = new Date(b.created_at).getTime()
       return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
     })
+
+  // Slicing for client-side pagination (50 orders per page)
+  const startIndex = (currentPage - 1) * ORDERS_PER_PAGE
+  const endIndex = startIndex + ORDERS_PER_PAGE
+  const paginatedOrders = activeTabOrders.slice(startIndex, endIndex)
+  const totalPages = Math.ceil(activeTabOrders.length / ORDERS_PER_PAGE) || 1
 
   return (
     <div className="min-h-screen bg-[#07090e] text-white">
@@ -1082,6 +1126,14 @@ export default function ShiprocketDashboardPage() {
                   </button>
                 )}
                 <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                  className="px-4 py-2 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-bold text-red-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                >
+                  {bulkDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" /> : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
+                  {bulkDeleting ? 'Deleting...' : 'Delete Selected'}
+                </button>
+                <button
                   onClick={() => setSelectedOrders({})}
                   className="px-3.5 py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-white hover:bg-white/10"
                 >
@@ -1130,8 +1182,9 @@ export default function ShiprocketDashboardPage() {
                 </button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm table-auto border-collapse">
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm table-auto border-collapse">
                   
                   {/* Custom headers dynamically rendered per tab with exact min-widths */}
                   <thead>
@@ -1140,8 +1193,8 @@ export default function ShiprocketDashboardPage() {
                         <th className="px-6 py-4 w-12 text-left">
                           <input
                             type="checkbox"
-                            checked={activeTabOrders.length > 0 && activeTabOrders.every((o) => selectedOrders[o.id])}
-                            onChange={() => toggleSelectAll(activeTabOrders)}
+                            checked={paginatedOrders.length > 0 && paginatedOrders.every((o) => selectedOrders[o.id])}
+                            onChange={() => toggleSelectAll(paginatedOrders)}
                             className="rounded border-white/10 bg-white/5 text-purple-600 focus:ring-0 focus:ring-offset-0"
                           />
                         </th>
@@ -1271,7 +1324,7 @@ export default function ShiprocketDashboardPage() {
                         </tr>
                       ))
                     ) : (
-                      activeTabOrders.map((order) => {
+                      paginatedOrders.map((order) => {
                         const isSelected = !!selectedOrders[order.id]
                         const isPhoneUnmasked = !!unmaskedPhones[order.id]
                         const rtoAssessment = getRtoRisk(order)
@@ -1832,10 +1885,83 @@ export default function ShiprocketDashboardPage() {
                   </tbody>
                 </table>
               </div>
-            )}
-          </div>
+              
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 px-2 select-none">
+                  <p className="text-xs text-white/50 font-normal">
+                    Showing <span className="font-bold text-white">{startIndex + 1}</span> to <span className="font-bold text-white">{Math.min(endIndex, activeTabOrders.length)}</span> of <span className="font-bold text-white">{activeTabOrders.length}</span> orders
+                  </p>
+                  
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage === 1}
+                      className="px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/5 transition-all font-semibold"
+                    >
+                      First
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                      disabled={currentPage === 1}
+                      className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/5 transition-all font-semibold"
+                    >
+                      Prev
+                    </button>
+                    
+                    {/* Page Numbers */}
+                    {Array.from({ length: totalPages }).map((_, i) => {
+                      const pageNum = i + 1
+                      // Display a window of pages around current page
+                      if (pageNum === 1 || pageNum === totalPages || Math.abs(pageNum - currentPage) <= 1) {
+                        return (
+                          <button
+                            key={pageNum}
+                            type="button"
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                              currentPage === pageNum
+                                ? 'bg-purple-600 border border-purple-500 text-white shadow-lg shadow-purple-500/20'
+                                : 'border border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        )
+                      }
+                      // Render ellipsis
+                      if (pageNum === 2 || pageNum === totalPages - 1) {
+                        return <span key={pageNum} className="text-white/40 text-xs px-1 select-none">...</span>
+                      }
+                      return null
+                    })}
+                    
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                      disabled={currentPage === totalPages}
+                      className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/5 transition-all font-semibold"
+                    >
+                      Next
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={currentPage === totalPages}
+                      className="px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-xs text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/5 transition-all font-semibold"
+                    >
+                      Last
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
-      </main>
+      </div>
+    </main>
 
       {/* ── COURIER SELECTION MODAL (Ship Now triggered) ── */}
       {activeCourierOrder && (
@@ -2243,20 +2369,35 @@ export default function ShiprocketDashboardPage() {
             </div>
 
             {/* Bottom Actions */}
-            <div className="mt-8 pt-4 border-t border-white/10 flex gap-3 shrink-0">
+            <div className="mt-8 pt-4 border-t border-white/10 flex flex-col gap-3 shrink-0">
               <button
-                onClick={() => router.push(`/orders/${activeDetailOrder.id}`)}
-                className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white text-center transition-all shadow-lg shadow-purple-600/10 active:scale-95 flex items-center justify-center gap-1.5"
+                onClick={() => handleDeleteOrder(activeDetailOrder.id)}
+                disabled={deletingOrderId === activeDetailOrder.id}
+                className="w-full py-2.5 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-extrabold text-red-400 text-center transition-all shadow-lg shadow-red-900/10 active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Compass className="w-4 h-4" />
-                Open Full Detail Page
+                {deletingOrderId === activeDetailOrder.id ? (
+                  <Loader2 className="w-4.5 h-4.5 animate-spin text-red-400" />
+                ) : (
+                  <Trash2 className="w-4 h-4 text-red-400" />
+                )}
+                {deletingOrderId === activeDetailOrder.id ? 'Deleting Order...' : 'Delete Order'}
               </button>
-              <button
-                onClick={() => setActiveDetailOrder(null)}
-                className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-bold text-white hover:bg-white/10 transition-all text-center"
-              >
-                Close Drawer
-              </button>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => router.push(`/orders/${activeDetailOrder.id}`)}
+                  className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white text-center transition-all shadow-lg shadow-purple-600/10 active:scale-95 flex items-center justify-center gap-1.5"
+                >
+                  <Compass className="w-4 h-4" />
+                  Open Full Detail Page
+                </button>
+                <button
+                  onClick={() => setActiveDetailOrder(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-bold text-white hover:bg-white/10 transition-all text-center"
+                >
+                  Close Drawer
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2300,6 +2441,8 @@ function getDeliveryStatusInfo(order: ShopifyOrder) {
       return { label: 'Out for Delivery', variant: 'yellow' as const }
     case 'failure':
       return { label: 'Delivery Failed', variant: 'red' as const }
+    case 'rto':
+      return { label: 'RTO', variant: 'red' as const }
     case 'attempted_delivery':
       return { label: 'Attempted', variant: 'yellow' as const }
     case 'confirmed':

@@ -119,6 +119,10 @@ export async function createShiprocketAdhocOrder(payload: ShiprocketAdhocOrderPa
   return shiprocketPost('/orders/create/adhoc', payload)
 }
 
+export async function cancelShiprocketOrder(orderId: number) {
+  return shiprocketPost('/orders/cancel', { ids: [orderId] })
+}
+
 /**
  * Resolve a Shiprocket order by the channel order number
  * (e.g. Shopify order.name "#1021" → strip # → "1021")
@@ -141,6 +145,39 @@ export async function findShiprocketOrderByChannelNumber(
     }
   } catch {
     return null
+  }
+}
+
+export async function getAllShiprocketOrders(): Promise<any[]> {
+  try {
+    // 1. Fetch page 1 to discover total pages
+    const data = await shiprocketGet(`/orders?per_page=100&page=1`)
+    let allOrders = data?.data ?? data?.orders ?? []
+    if (!Array.isArray(allOrders)) {
+      allOrders = []
+    }
+
+    const totalPages = data?.meta?.pagination?.total_pages
+    if (typeof totalPages === 'number' && totalPages > 1) {
+      // 2. Fetch all remaining pages in parallel concurrently
+      const remainingPromises: Promise<any>[] = []
+      for (let p = 2; p <= totalPages; p++) {
+        remainingPromises.push(shiprocketGet(`/orders?per_page=100&page=${p}`))
+      }
+
+      const results = await Promise.all(remainingPromises)
+      results.forEach((res) => {
+        const list = res?.data ?? res?.orders ?? []
+        if (Array.isArray(list)) {
+          allOrders = allOrders.concat(list)
+        }
+      })
+    }
+
+    return allOrders
+  } catch (error) {
+    console.error('Error fetching Shiprocket orders in parallel:', error)
+    return []
   }
 }
 

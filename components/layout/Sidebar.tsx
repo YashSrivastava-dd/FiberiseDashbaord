@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus, MessageCircle } from 'lucide-react'
+import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus, MessageCircle, LogOut } from 'lucide-react'
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', href: '/' },
@@ -18,6 +18,17 @@ const menuItems = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
+  const router = useRouter()
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      router.push('/login')
+      router.refresh()
+    } catch (error) {
+      console.error('Logout failed:', error)
+    }
+  }
 
   return (
     <aside
@@ -65,6 +76,18 @@ export function Sidebar() {
             )
           })}
         </nav>
+
+        {/* Logout Action */}
+        <div className="mt-auto pt-4 border-t border-white/10 select-none">
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10 cursor-pointer text-left focus:outline-none"
+          >
+            <LogOut className="w-5 h-5 flex-shrink-0" />
+            {!collapsed && <span className="text-sm font-medium">Logout</span>}
+          </button>
+        </div>
       </div>
     </aside>
   )

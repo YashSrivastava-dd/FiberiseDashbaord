@@ -20,6 +20,7 @@ import {
   Download,
   CheckCircle2,
   XCircle,
+  Trash2
 } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -252,6 +253,29 @@ export default function OrderDetailPage() {
     setActionLoading(null)
   }
 
+  const [deleting, setDeleting] = useState(false)
+
+  const handleDeleteOrder = async () => {
+    if (!window.confirm('Are you sure you want to permanently delete this order?')) return
+
+    try {
+      setActionError(null)
+      setDeleting(true)
+      const res = await fetch(`/api/shopify/orders/${orderId}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to delete order')
+
+      // Redirect back to orders dashboard
+      router.push('/orders')
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to delete order')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   // ── Loading ──
   if (loading) {
     return (
@@ -323,9 +347,21 @@ export default function OrderDetailPage() {
             </div>
 
             {/* Status badges */}
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 items-center">
               <Badge label={order.financial_status} variant={statusVariant(order.financial_status)} />
               <Badge label={order.fulfillment_status ?? 'Unfulfilled'} variant={statusVariant(order.fulfillment_status)} />
+              <button
+                onClick={handleDeleteOrder}
+                disabled={deleting}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-2"
+              >
+                {deleting ? (
+                  <Loader2 className="w-3 h-3 animate-spin text-red-300" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5 text-red-300" />
+                )}
+                {deleting ? 'Deleting...' : 'Delete Order'}
+              </button>
             </div>
           </div>
 
