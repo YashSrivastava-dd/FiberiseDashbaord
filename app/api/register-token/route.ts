@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { connectToDatabase } from '@/src/config/database';
 import { tokenService } from '@/src/services/tokenService';

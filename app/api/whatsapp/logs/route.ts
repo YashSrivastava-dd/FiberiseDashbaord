@@ -5,6 +5,8 @@
  * POST /api/whatsapp/logs   — Retry a failed message
  */
 
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getMessageLogs, getCustomerById } from '@/src/services/firestore.service';
 import { sendWhatsAppTemplate } from '@/src/services/whatsapp.service';

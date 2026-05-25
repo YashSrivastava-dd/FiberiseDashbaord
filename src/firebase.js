@@ -24,18 +24,20 @@ if (getApps().length === 0) {
   app = getApps()[0];
 }
 
-// Initialize Firebase services
-// Initialize Firestore - Firebase SDK automatically detects the region (nam5)
-// If you have a specific database ID (not default), specify it as second parameter
-// Example: getFirestore(app, 'your-database-id')
-const db = getFirestore(app);
-
-const auth = getAuth(app);
-const storage = getStorage(app);
-
-// Initialize Analytics (only in browser environment)
+// Initialize Firebase services safely for Next.js Server-Side Pre-rendering
+/** @type {import('firebase/firestore').Firestore} */
+let db;
+/** @type {import('firebase/auth').Auth} */
+let auth;
+/** @type {import('firebase/storage').FirebaseStorage} */
+let storage;
 let analytics = null;
+
 if (typeof window !== "undefined") {
+  db = getFirestore(app);
+  auth = getAuth(app);
+  storage = getStorage(app);
+
   isSupported().then((supported) => {
     if (supported) {
       analytics = getAnalytics(app);

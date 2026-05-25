@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { cancelShiprocketOrder } from '@/src/services/shiprocketClient'
 import { getCachedOrderById, removeOrderFromCache } from '@/src/services/ordersCache'

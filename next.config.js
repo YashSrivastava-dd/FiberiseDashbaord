@@ -30,7 +30,7 @@ const nextConfig = {
     }
     
     // Production optimizations
-    if (!dev) {
+    if (!dev && !isServer) {
       config.optimization = {
         ...config.optimization,
         moduleIds: 'deterministic',
