@@ -4,10 +4,11 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus, MessageCircle, LogOut } from 'lucide-react'
+import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus, MessageCircle, LogOut, TrendingUp } from 'lucide-react'
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', href: '/' },
+  { icon: TrendingUp, label: 'Sales Analytics', href: '/sales-dashboard' },
   { icon: ShoppingBag, label: 'Orders', href: '/orders' },
   { icon: PackagePlus, label: 'Create Order', href: '/shiprocket/create-order' },
   { icon: MessageCircle, label: 'WhatsApp', href: '/whatsapp' },

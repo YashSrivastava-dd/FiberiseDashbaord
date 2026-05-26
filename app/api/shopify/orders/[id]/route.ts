@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { cancelShiprocketOrder } from '@/src/services/shiprocketClient'
-import { getCachedOrderById, removeOrderFromCache } from '@/src/services/ordersCache'
+import { getCachedOrderById, removeOrderFromCache, cancelOrderInCache } from '@/src/services/ordersCache'
 
 const SHOP_DOMAIN = process.env.NEXT_PUBLIC_SHOPIFY_SHOP_DOMAIN
 const API_VERSION = process.env.NEXT_PUBLIC_SHOPIFY_API_VERSION || '2024-01'
@@ -71,12 +71,12 @@ export async function DELETE(
         console.warn('Failed to cancel order directly on Shiprocket:', err)
       }
       
-      // Remove from memory cache so it disappears instantly
-      removeOrderFromCache(id)
+      // Update in memory cache to mark as cancelled
+      cancelOrderInCache(id)
       return NextResponse.json({ success: true, message: 'Shiprocket order cancelled successfully' }, { status: 200 })
     }
 
-    // 2. Shopify order deletion logic
+    // 2. Shopify order cancellation logic
     if (!SHOP_DOMAIN || !ADMIN_TOKEN) {
       return NextResponse.json(
         { error: 'Shopify credentials are not configured.' },
@@ -84,42 +84,34 @@ export async function DELETE(
       )
     }
 
-    // Try to cancel first in Shopify (required for delete)
-    await fetch(`https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders/${id}/cancel.json`, {
+    // Cancel order on Shopify
+    const cancelRes = await fetch(`https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders/${id}/cancel.json`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': ADMIN_TOKEN,
       },
-    }).catch((err) => {
-      console.warn('Failed to cancel order on Shopify (might already be cancelled):', err)
     })
 
-    // Delete in Shopify
-    const deleteRes = await fetch(`https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders/${id}.json`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': ADMIN_TOKEN,
-      },
-    })
-
-    if (!deleteRes.ok) {
-      const text = await deleteRes.text().catch(() => '')
-      return NextResponse.json(
-        { error: `Shopify delete error: ${deleteRes.status} ${deleteRes.statusText}`, details: text },
-        { status: deleteRes.status },
-      )
+    if (!cancelRes.ok) {
+      const text = await cancelRes.text().catch(() => '')
+      // 422 means already cancelled
+      if (cancelRes.status !== 422) {
+        return NextResponse.json(
+          { error: `Shopify cancel error: ${cancelRes.status} ${cancelRes.statusText}`, details: text },
+          { status: cancelRes.status },
+        )
+      }
     }
 
-    // Remove from in-memory cache so it disappears instantly
-    removeOrderFromCache(id)
+    // Update in-memory cache to reflect the cancelled status instantly
+    cancelOrderInCache(id)
 
-    return NextResponse.json({ success: true, message: 'Shopify order deleted successfully' }, { status: 200 })
+    return NextResponse.json({ success: true, message: 'Shopify order cancelled successfully' }, { status: 200 })
   } catch (error: any) {
-    console.error('Error deleting order:', error)
+    console.error('Error cancelling order:', error)
     return NextResponse.json(
-      { error: error.message || 'Failed to delete order' },
+      { error: error.message || 'Failed to cancel order' },
       { status: 500 },
     )
   }

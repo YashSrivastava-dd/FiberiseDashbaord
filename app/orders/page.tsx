@@ -33,7 +33,8 @@ import {
   ShoppingCart,
   ArrowLeft,
   Filter,
-  Trash2
+  Trash2,
+  MoreHorizontal
 } from 'lucide-react'
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -69,6 +70,7 @@ interface ShopifyOrder {
   fulfillment_status: string | null
   total_price: string
   currency: string
+  cancelled_at?: string | null
   customer?: {
     first_name?: string
     last_name?: string
@@ -134,13 +136,21 @@ function statusVariant(status: string | null): 'green' | 'yellow' | 'red' | 'blu
   return 'default'
 }
 
+function isOrderCancelled(order: ShopifyOrder): boolean {
+  return (
+    !!(order as any).cancelled_at ||
+    order.financial_status?.toLowerCase() === 'voided' ||
+    order.fulfillments?.[0]?.shipment_status === 'cancelled'
+  )
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function ShiprocketDashboardPage() {
   const router = useRouter()
   
   // Tab states
-  const [currentTab, setCurrentTab] = useState<'new' | 'ready_to_ship' | 'pickups_manifests' | 'in_transit' | 'delivered' | 'rto' | 'all'>('new')
+  const [currentTab, setCurrentTab] = useState<'new' | 'ready_to_ship' | 'pickups_manifests' | 'in_transit' | 'delivered' | 'rto' | 'cancelled' | 'all'>('new')
   const [manifestSubtab, setManifestSubtab] = useState<'pickup_ids' | 'manifests'>('pickup_ids')
 
   // Pagination State
@@ -189,6 +199,83 @@ export default function ShiprocketDashboardPage() {
   const [activeTrackingOrder, setActiveTrackingOrder] = useState<ShopifyOrder | null>(null)
   const [activeRtoRiskOrder, setActiveRtoRiskOrder] = useState<ShopifyOrder | null>(null)
   const [activeDetailOrder, setActiveDetailOrder] = useState<ShopifyOrder | null>(null)
+  const [activeDropdownOrderId, setActiveDropdownOrderId] = useState<number | null>(null)
+
+  const handleCloneOrder = async (order: ShopifyOrder) => {
+    const cleanName = order.name || ''
+    const cleanBaseName = cleanName.replace('#', '').trim()
+    const clonedName = `${cleanBaseName}-C`
+
+    const orderItems = (order.line_items || []).map(item => ({
+      name: item.title || 'Starter pack',
+      sku: item.sku || 'test pack',
+      units: Number(item.quantity) || 1,
+      selling_price: Number(item.price) || 0
+    }))
+
+    // Sanitize phone to exactly 10 digits numeric
+    const rawPhone = order.customer?.phone || order.shipping_address?.phone || '9999999999'
+    const sanitizedPhone = String(rawPhone).replace(/[^0-9]/g, '').slice(-10) || '9999999999'
+
+    // Sanitize pincode to numeric
+    const rawZip = order.shipping_address?.zip || '400001'
+    const sanitizedZip = Number(String(rawZip).replace(/[^0-9]/g, '')) || 400001
+
+    const payload = {
+      order_id: clonedName,
+      order_date: new Date().toISOString().slice(0, 10), // 'YYYY-MM-DD'
+      pickup_location: 'Primary',
+      billing_customer_name: order.customer?.first_name || 'Guest',
+      billing_last_name: order.customer?.last_name || '',
+      billing_address: order.shipping_address?.address1 || 'N/A',
+      billing_address_2: order.shipping_address?.address2 || '',
+      billing_city: order.shipping_address?.city || 'Mumbai',
+      billing_pincode: sanitizedZip,
+      billing_state: order.shipping_address?.province || 'Maharashtra',
+      billing_country: order.shipping_address?.country || 'India',
+      billing_email: order.customer?.email || 'customer@example.com',
+      billing_phone: sanitizedPhone,
+      shipping_is_billing: true,
+      order_items: orderItems,
+      payment_method: order.financial_status === 'paid' ? 'Prepaid' : 'COD',
+      sub_total: Number(order.total_price) || 0,
+      length: 15,
+      breadth: 10,
+      height: 5,
+      weight: 0.45
+    }
+
+    try {
+      setActiveDropdownOrderId(null)
+      triggerNotification('success', `Cloning order ${order.name} to Shiprocket panel...`)
+      
+      const res = await fetch('/api/shiprocket/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to create order on Shiprocket')
+
+      // Prepend the new cloned order to the frontend state
+      const clonedOrder: ShopifyOrder = {
+        ...order,
+        id: data.order_id || Math.floor(1000000 + Math.random() * 9000000),
+        name: `#${clonedName}`,
+        created_at: new Date().toISOString(),
+        fulfillment_status: null,
+        fulfillments: [],
+        cancelled_at: null,
+      }
+
+      setOrders((prev) => [clonedOrder, ...prev])
+      setCurrentTab('new')
+      triggerNotification('success', `Order cloned successfully to Shiprocket & New Dispatches!`)
+    } catch (err: any) {
+      triggerNotification('error', `Failed to sync clone to Shiprocket: ${err.message}`)
+    }
+  }
   
   // Shiprocket Actions Loading state
   const [actionLoadingOrderId, setActionLoadingOrderId] = useState<number | null>(null)
@@ -392,11 +479,11 @@ export default function ShiprocketDashboardPage() {
     setTimeout(() => setActionMessage(null), 5000)
   }
 
-  // ── Delete Order ──
+  // ── Cancel Order ──
   const [deletingOrderId, setDeletingOrderId] = useState<number | null>(null)
 
   const handleDeleteOrder = async (orderId: number) => {
-    if (!window.confirm('Are you sure you want to permanently delete this order?')) return
+    if (!window.confirm('Are you sure you want to cancel this order?')) return
 
     try {
       setDeletingOrderId(orderId)
@@ -404,14 +491,23 @@ export default function ShiprocketDashboardPage() {
         method: 'DELETE',
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to delete order')
+      if (!res.ok) throw new Error(data.error || 'Failed to cancel order')
 
-      // Remove from frontend state
-      setOrders((prev) => prev.filter((o) => o.id !== orderId))
+      // Update order state in-place to cancelled
+      setOrders((prev) => prev.map((o) => {
+        if (o.id === orderId) {
+          return {
+            ...o,
+            cancelled_at: new Date().toISOString(),
+            financial_status: 'voided'
+          }
+        }
+        return o
+      }))
       setActiveDetailOrder(null)
-      triggerNotification('success', 'Order deleted successfully.')
+      triggerNotification('success', 'Order cancelled successfully.')
     } catch (err: any) {
-      triggerNotification('error', err.message || 'Error deleting order.')
+      triggerNotification('error', err.message || 'Error cancelling order.')
     } finally {
       setDeletingOrderId(null)
     }
@@ -426,7 +522,7 @@ export default function ShiprocketDashboardPage() {
 
     if (selectedIds.length === 0) return
 
-    if (!window.confirm(`Are you sure you want to permanently delete the ${selectedIds.length} selected orders?`)) return
+    if (!window.confirm(`Are you sure you want to cancel the ${selectedIds.length} selected orders?`)) return
 
     try {
       setBulkDeleting(true)
@@ -436,14 +532,23 @@ export default function ShiprocketDashboardPage() {
         body: JSON.stringify({ ids: selectedIds }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to bulk delete orders')
+      if (!res.ok) throw new Error(data.error || 'Failed to bulk cancel orders')
 
-      // Remove deleted orders from frontend state
-      setOrders((prev) => prev.filter((o) => !selectedIds.includes(o.id)))
+      // Mark selected orders as cancelled in state
+      setOrders((prev) => prev.map((o) => {
+        if (selectedIds.includes(o.id)) {
+          return {
+            ...o,
+            cancelled_at: new Date().toISOString(),
+            financial_status: 'voided'
+          }
+        }
+        return o
+      }))
       setSelectedOrders({})
-      triggerNotification('success', `Successfully deleted ${selectedIds.length} orders.`)
+      triggerNotification('success', `Successfully cancelled ${selectedIds.length} orders.`)
     } catch (err: any) {
-      triggerNotification('error', err.message || 'Error bulk deleting orders.')
+      triggerNotification('error', err.message || 'Error bulk cancelling orders.')
     } finally {
       setBulkDeleting(false)
     }
@@ -633,8 +738,17 @@ export default function ShiprocketDashboardPage() {
 
   // Group into Tab lists dynamically
   const ordersTabLists = {
-    new: filteredOrders.filter(o => !o.fulfillment_status || o.fulfillment_status === 'unfulfilled'),
+    new: filteredOrders.filter(o => {
+      if (isOrderCancelled(o)) return false
+      if (!o.fulfillment_status || o.fulfillment_status === 'unfulfilled') {
+        const ageInMs = Date.now() - new Date(o.created_at).getTime()
+        const ageInDays = ageInMs / (1000 * 60 * 60 * 24)
+        return ageInDays <= 2 // Only show new orders created within the last 2 days
+      }
+      return false
+    }),
     ready_to_ship: filteredOrders.filter(o => {
+      if (isOrderCancelled(o)) return false
       if (o.fulfillment_status === 'fulfilled') {
         const latest = o.fulfillments?.[0]
         const status = (latest?.shipment_status || '').toLowerCase()
@@ -642,8 +756,9 @@ export default function ShiprocketDashboardPage() {
       }
       return false
     }),
-    pickups_manifests: filteredOrders, // Special rendered view tab
+    pickups_manifests: filteredOrders.filter(o => !isOrderCancelled(o)), // Special rendered view tab
     in_transit: filteredOrders.filter(o => {
+      if (isOrderCancelled(o)) return false
       if (o.fulfillment_status === 'fulfilled') {
         const latest = o.fulfillments?.[0]
         const status = (latest?.shipment_status || '').toLowerCase()
@@ -652,6 +767,7 @@ export default function ShiprocketDashboardPage() {
       return false
     }),
     delivered: filteredOrders.filter(o => {
+      if (isOrderCancelled(o)) return false
       if (o.fulfillment_status === 'fulfilled') {
         const latest = o.fulfillments?.[0]
         const status = (latest?.shipment_status || '').toLowerCase()
@@ -660,6 +776,7 @@ export default function ShiprocketDashboardPage() {
       return false
     }),
     rto: filteredOrders.filter(o => {
+      if (isOrderCancelled(o)) return false
       if (o.fulfillment_status === 'fulfilled') {
         const latest = o.fulfillments?.[0]
         const status = (latest?.shipment_status || '').toLowerCase()
@@ -667,12 +784,18 @@ export default function ShiprocketDashboardPage() {
       }
       return false
     }),
+    cancelled: filteredOrders.filter(o => isOrderCancelled(o)),
     all: filteredOrders
   }
 
   // Sorted list for currently active tab
   const activeTabOrders = (ordersTabLists[currentTab] || [])
     .sort((a, b) => {
+      if (currentTab === 'rto') {
+        const dateA = new Date(a.fulfillments?.[0]?.created_at || a.created_at).getTime()
+        const dateB = new Date(b.fulfillments?.[0]?.created_at || b.created_at).getTime()
+        return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
+      }
       const dateA = new Date(a.created_at).getTime()
       const dateB = new Date(b.created_at).getTime()
       return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
@@ -1032,7 +1155,7 @@ export default function ShiprocketDashboardPage() {
 
           {/* ── Shiprocket Tabs Navigation Bar ── */}
           <div className="border-b border-white/10 mb-6 flex overflow-x-auto scrollbar-none gap-2">
-            {(['new', 'ready_to_ship', 'pickups_manifests', 'in_transit', 'delivered', 'rto', 'all'] as const).map((tab) => {
+            {(['new', 'ready_to_ship', 'pickups_manifests', 'in_transit', 'delivered', 'rto', 'cancelled', 'all'] as const).map((tab) => {
               const isActive = currentTab === tab
               const count = tab === 'pickups_manifests' ? manifests.length : (ordersTabLists[tab] || []).length
               const tabLabels = {
@@ -1042,6 +1165,7 @@ export default function ShiprocketDashboardPage() {
                 in_transit: 'In Transit',
                 delivered: 'Delivered',
                 rto: 'RTO',
+                cancelled: 'Cancelled',
                 all: 'All'
               }
 
@@ -1125,14 +1249,16 @@ export default function ShiprocketDashboardPage() {
                     Bulk Download Manifests
                   </button>
                 )}
-                <button
-                  onClick={handleBulkDelete}
-                  disabled={bulkDeleting}
-                  className="px-4 py-2 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-bold text-red-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-                >
-                  {bulkDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" /> : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
-                  {bulkDeleting ? 'Deleting...' : 'Delete Selected'}
-                </button>
+                {currentTab !== 'cancelled' && (
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={bulkDeleting}
+                    className="px-4 py-2 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-bold text-red-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                  >
+                    {bulkDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" /> : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
+                    {bulkDeleting ? 'Cancelling...' : 'Cancel Selected'}
+                  </button>
+                )}
                 <button
                   onClick={() => setSelectedOrders({})}
                   className="px-3.5 py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-white hover:bg-white/10"
@@ -1269,6 +1395,17 @@ export default function ShiprocketDashboardPage() {
                           <th className="px-6 py-4 min-w-[200px] text-left">Reason</th>
                           <th className="px-6 py-4 min-w-[100px] text-left">Status</th>
                           <th className="px-6 py-4 min-w-[140px] text-right">Action</th>
+                        </>
+                      )}
+
+                      {currentTab === 'cancelled' && (
+                        <>
+                          <th className="px-6 py-4 min-w-[150px] text-left">Order Details</th>
+                          <th className="px-6 py-4 min-w-[200px] text-left">Customer Details</th>
+                          <th className="px-6 py-4 min-w-[180px] text-left">Product Details</th>
+                          <th className="px-6 py-4 min-w-[120px] text-left">Payment</th>
+                          <th className="px-6 py-4 min-w-[150px] text-left">Cancelled At</th>
+                          <th className="px-6 py-4 min-w-[100px] text-left">Status</th>
                         </>
                       )}
 
@@ -1819,12 +1956,129 @@ export default function ShiprocketDashboardPage() {
 
                                 {/* Action */}
                                 <td className="px-6 py-4 text-right font-medium" onClick={(e) => e.stopPropagation()}>
-                                  <button
-                                    onClick={() => triggerNotification('success', 'RTO tracking dispatched.')}
-                                    className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-extrabold text-white transition-all shadow-lg active:scale-95"
-                                  >
-                                    Track RTO
-                                  </button>
+                                  <div className="relative inline-block text-left">
+                                    <button
+                                      onClick={() => setActiveDropdownOrderId(activeDropdownOrderId === order.id ? null : order.id)}
+                                      className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white transition-all active:scale-95 flex items-center justify-center shrink-0"
+                                    >
+                                      <MoreHorizontal className="w-5 h-5" />
+                                    </button>
+
+                                    {activeDropdownOrderId === order.id && (
+                                      <>
+                                        <div 
+                                          className="fixed inset-0 z-10" 
+                                          onClick={() => setActiveDropdownOrderId(null)}
+                                        />
+                                        <div className="absolute right-0 mt-2 w-48 rounded-xl bg-[#0e121a] border border-white/10 shadow-2xl z-20 py-1.5 focus:outline-none animate-fade-in text-left">
+                                          <button
+                                            onClick={() => {
+                                              setActiveDropdownOrderId(null);
+                                              triggerNotification('success', 'Support ticket creation initiated.');
+                                            }}
+                                            className="w-full px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-purple-600/20 text-left transition-colors font-medium"
+                                          >
+                                            Create Ticket
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setActiveDropdownOrderId(null);
+                                              triggerNotification('success', 'Fetching order invoice PDF...');
+                                            }}
+                                            className="w-full px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-purple-600/20 text-left transition-colors font-medium"
+                                          >
+                                            Download Invoice
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setActiveDropdownOrderId(null);
+                                              triggerNotification('success', 'Order tag modal triggered.');
+                                            }}
+                                            className="w-full px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-purple-600/20 text-left transition-colors font-medium"
+                                          >
+                                            Add Order Tag
+                                          </button>
+                                          <div className="h-px bg-white/5 my-1" />
+                                          <button
+                                            onClick={() => handleCloneOrder(order)}
+                                            className="w-full px-4 py-2 text-xs text-purple-400 hover:text-purple-300 hover:bg-purple-600/20 text-left transition-colors font-semibold"
+                                          >
+                                            Clone Order
+                                          </button>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                              </>
+                            )}
+
+                            {/* ── CANCELLED TAB ── */}
+                            {currentTab === 'cancelled' && (
+                              <>
+                                {/* Order details */}
+                                <td className="px-6 py-4">
+                                  <div className="flex flex-col font-medium">
+                                    <span
+                                      onClick={(e) => { e.stopPropagation(); setActiveDetailOrder(order); }}
+                                      className="font-bold text-purple-300 hover:text-purple-200 cursor-pointer text-sm"
+                                    >
+                                      {order.name}
+                                    </span>
+                                    <span className="text-xs text-white/50 mt-1 font-normal">
+                                      {new Date(order.created_at).toLocaleString('en-US', {
+                                        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                                      })}
+                                    </span>
+                                  </div>
+                                </td>
+
+                                {/* Customer details */}
+                                <td className="px-6 py-4 text-xs font-medium">
+                                  <div className="flex flex-col gap-1 max-w-[180px]">
+                                    <span className="font-bold text-sm text-white">{customerName || 'Guest Checkout'}</span>
+                                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                      <span className="text-white/60 font-normal">
+                                        {isPhoneUnmasked ? order.customer?.phone || 'No phone' : 'xxxxxxxxxx'}
+                                      </span>
+                                      <button onClick={() => togglePhoneMask(order.id)} className="text-white/40 hover:text-white transition-colors">
+                                        {isPhoneUnmasked ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                      </button>
+                                    </div>
+                                  </div>
+                                </td>
+
+                                {/* Product details */}
+                                <td className="px-6 py-4 text-xs font-medium">
+                                  <div className="flex flex-col gap-1 max-w-[160px]">
+                                    <span className="font-semibold text-white truncate" title={order.line_items?.[0]?.title}>
+                                      {order.line_items?.[0]?.title || 'No items'}
+                                    </span>
+                                    <span className="text-white/40 font-semibold mt-1">QTY: {order.line_items?.[0]?.quantity || 1}</span>
+                                  </div>
+                                </td>
+
+                                {/* Payment */}
+                                <td className="px-6 py-4 font-medium">
+                                  <div className="flex flex-col gap-1.5">
+                                    <span className="font-bold text-sm text-white">₹{order.total_price}</span>
+                                    <Badge
+                                      label={order.financial_status === 'paid' ? 'Prepaid' : 'COD'}
+                                      variant={order.financial_status === 'paid' ? 'green' : 'yellow'}
+                                    />
+                                  </div>
+                                </td>
+
+                                {/* Cancelled At */}
+                                <td className="px-6 py-4 text-xs text-red-400 font-semibold">
+                                  {order.cancelled_at ? new Date(order.cancelled_at).toLocaleString('en-US', {
+                                    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                                  }) : 'N/A'}
+                                </td>
+
+                                {/* Status */}
+                                <td className="px-6 py-4">
+                                  <Badge label="CANCELLED" variant="red" />
                                 </td>
                               </>
                             )}
@@ -2370,18 +2624,20 @@ export default function ShiprocketDashboardPage() {
 
             {/* Bottom Actions */}
             <div className="mt-8 pt-4 border-t border-white/10 flex flex-col gap-3 shrink-0">
-              <button
-                onClick={() => handleDeleteOrder(activeDetailOrder.id)}
-                disabled={deletingOrderId === activeDetailOrder.id}
-                className="w-full py-2.5 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-extrabold text-red-400 text-center transition-all shadow-lg shadow-red-900/10 active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {deletingOrderId === activeDetailOrder.id ? (
-                  <Loader2 className="w-4.5 h-4.5 animate-spin text-red-400" />
-                ) : (
-                  <Trash2 className="w-4 h-4 text-red-400" />
-                )}
-                {deletingOrderId === activeDetailOrder.id ? 'Deleting Order...' : 'Delete Order'}
-              </button>
+              {!isOrderCancelled(activeDetailOrder) && (
+                <button
+                  onClick={() => handleDeleteOrder(activeDetailOrder.id)}
+                  disabled={deletingOrderId === activeDetailOrder.id}
+                  className="w-full py-2.5 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-extrabold text-red-400 text-center transition-all shadow-lg shadow-red-900/10 active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {deletingOrderId === activeDetailOrder.id ? (
+                    <Loader2 className="w-4.5 h-4.5 animate-spin text-red-400" />
+                  ) : (
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  )}
+                  {deletingOrderId === activeDetailOrder.id ? 'Cancelling Order...' : 'Cancel Order'}
+                </button>
+              )}
 
               <div className="flex gap-3">
                 <button
@@ -2413,10 +2669,14 @@ function tabName(tab: string): string {
   if (tab === 'in_transit') return 'In Transit'
   if (tab === 'delivered') return 'Delivered'
   if (tab === 'rto') return 'Returned to Origin'
+  if (tab === 'cancelled') return 'Cancelled'
   return 'All Orders'
 }
 
 function getDeliveryStatusInfo(order: ShopifyOrder) {
+  if (isOrderCancelled(order)) {
+    return { label: 'Cancelled', variant: 'red' as const }
+  }
   if (!order.fulfillment_status) {
     return { label: 'Unfulfilled', variant: 'default' as const }
   }

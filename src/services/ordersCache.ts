@@ -30,6 +30,21 @@ export function removeOrderFromCache(id: string | number) {
   }
 }
 
+export function cancelOrderInCache(id: string | number) {
+  if (cachedOrders) {
+    cachedOrders = cachedOrders.map(o => {
+      if (String(o.id) === String(id)) {
+        return {
+          ...o,
+          cancelled_at: new Date().toISOString(),
+          financial_status: 'voided'
+        }
+      }
+      return o
+    })
+  }
+}
+
 export function getActiveFetchPromise() {
   return activeFetchPromise
 }

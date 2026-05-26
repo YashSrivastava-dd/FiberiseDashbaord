@@ -16,6 +16,12 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await createShiprocketAdhocOrder(body)
+    if (data.status_code === 0) {
+      return NextResponse.json(
+        { error: data.message || 'Shiprocket order creation failed', details: data },
+        { status: 400 }
+      )
+    }
     return NextResponse.json(data, { status: 200 })
   } catch (error: any) {
     console.error('Error creating Shiprocket adhoc order:', error)

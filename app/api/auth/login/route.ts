@@ -64,9 +64,12 @@ export async function POST(req: NextRequest) {
       { status: 200 },
     )
 
+    const protocol = req.headers.get('x-forwarded-proto') || req.nextUrl.protocol
+    const isHttps = protocol.includes('https')
+
     res.cookies.set('fiberise_session', encryptedToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isHttps,
       sameSite: 'lax',
       path: '/',
       maxAge: 24 * 60 * 60, // 24 hours in seconds

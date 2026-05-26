@@ -6,9 +6,12 @@ export async function POST(_req: NextRequest) {
   try {
     const res = NextResponse.json({ success: true }, { status: 200 })
 
+    const protocol = _req.headers.get('x-forwarded-proto') || _req.nextUrl.protocol
+    const isHttps = protocol.includes('https')
+
     res.cookies.set('fiberise_session', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isHttps,
       sameSite: 'lax',
       path: '/',
       expires: new Date(0), // Instantly expire the cookie

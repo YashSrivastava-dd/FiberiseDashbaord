@@ -15,7 +15,8 @@ import {
   getActiveFetchPromise,
   setActiveFetchPromise,
   getCachedOrderById,
-  removeOrderFromCache
+  removeOrderFromCache,
+  cancelOrderInCache
 } from '@/src/services/ordersCache'
 
 // Reusable helper to fetch all Shopify orders (handles pagination loop)
@@ -250,7 +251,7 @@ export async function DELETE(req: NextRequest) {
           } catch (err: any) {
             console.warn(`Failed to cancel Shiprocket order ${id}:`, err)
           }
-          removeOrderFromCache(id)
+          cancelOrderInCache(id)
           return { id, success: true, source: 'shiprocket' }
         }
 
@@ -259,32 +260,24 @@ export async function DELETE(req: NextRequest) {
           throw new Error('Shopify credentials are not configured.')
         }
 
-        // Cancel first (Shopify delete requirement)
-        await fetch(`https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders/${id}/cancel.json`, {
+        // Cancel order on Shopify
+        const cancelRes = await fetch(`https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders/${id}/cancel.json`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-Shopify-Access-Token': ADMIN_TOKEN,
           },
-        }).catch((err) => {
-          console.warn(`Failed to cancel Shopify order ${id}:`, err)
         })
 
-        // Delete
-        const deleteRes = await fetch(`https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders/${id}.json`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Shopify-Access-Token': ADMIN_TOKEN,
-          },
-        })
-
-        if (!deleteRes.ok) {
-          const text = await deleteRes.text().catch(() => '')
-          throw new Error(`Shopify delete failed: ${deleteRes.status} ${text}`)
+        if (!cancelRes.ok) {
+          const text = await cancelRes.text().catch(() => '')
+          // 422 means already cancelled
+          if (cancelRes.status !== 422) {
+            throw new Error(`Shopify cancel failed: ${cancelRes.status} ${text}`)
+          }
         }
 
-        removeOrderFromCache(id)
+        cancelOrderInCache(id)
         return { id, success: true, source: 'shopify' }
       })
     )
@@ -296,9 +289,9 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({ success: true, results: summary }, { status: 200 })
   } catch (error: any) {
-    console.error('Error in bulk delete orders:', error)
+    console.error('Error in bulk cancel orders:', error)
     return NextResponse.json(
-      { error: error.message || 'Failed to bulk delete orders' },
+      { error: error.message || 'Failed to bulk cancel orders' },
       { status: 500 },
     )
   }
