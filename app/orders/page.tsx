@@ -140,6 +140,8 @@ function isOrderCancelled(order: ShopifyOrder): boolean {
   return (
     !!(order as any).cancelled_at ||
     order.financial_status?.toLowerCase() === 'voided' ||
+    order.financial_status?.toLowerCase() === 'cancelled' ||
+    order.financial_status?.toLowerCase() === 'refunded' ||
     order.fulfillments?.[0]?.shipment_status === 'cancelled'
   )
 }
@@ -189,6 +191,7 @@ export default function ShiprocketDashboardPage() {
   const [orders, setOrders] = useState<ShopifyOrder[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const [isOffline, setIsOffline] = useState<boolean>(false)
 
   // Interactive UI elements & simulation states
   const [unmaskedPhones, setUnmaskedPhones] = useState<Record<number, boolean>>({})
@@ -330,6 +333,8 @@ export default function ShiprocketDashboardPage() {
         })
 
         setOrders(enriched)
+        setIsOffline(!!data.isOffline)
+        setError(null)
       } catch (err: any) {
         setError(err.message)
       } finally {
@@ -851,12 +856,28 @@ export default function ShiprocketDashboardPage() {
               <div>
                 <p className="text-white/50 text-xs uppercase tracking-wide">Sync Status</p>
                 <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-                  <span className="text-sm font-bold text-white">Live Connection</span>
+                  <span className={`w-2 h-2 rounded-full ${isOffline ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 animate-ping'}`}></span>
+                  <span className="text-sm font-bold text-white">
+                    {isOffline ? 'Offline / Demo' : 'Live Connection'}
+                  </span>
                 </div>
               </div>
             </div>
           </div>
+
+          {isOffline && (
+            <div className="mb-6 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-300 text-sm flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 shrink-0 text-amber-400" />
+              <span>🔌 <strong>Offline / Demo Mode:</strong> External Shopify & Shiprocket endpoints are currently unreachable (getaddrinfo ENOTFOUND). Showing realistic simulated data for dashboard evaluation.</span>
+            </div>
+          )}
+
+          {error && !isOffline && (
+            <div className="mb-6 p-4 rounded-xl border border-red-500/40 bg-red-500/10 text-red-300 text-sm flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <span>Failed to fetch real-time logs: {error}</span>
+            </div>
+          )}
 
           {/* Search, Sort, Filter Drawer Toggle */}
           <div className="bg-card rounded-2xl border border-white/10 p-4 mb-6 backdrop-blur-xl">

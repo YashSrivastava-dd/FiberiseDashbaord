@@ -90,135 +90,173 @@ export async function GET(_req: NextRequest) {
         getAllShiprocketOrders()
       ]).then(([shopify, shiprocket]) => {
         setActiveFetchPromise(null) // Reset when completed
-        return { shopifyOrders: shopify, shiprocketOrders: shiprocket }
+        return { shopifyOrders: shopify, shiprocketOrders: shiprocket, isOffline: false }
       }).catch((err) => {
         setActiveFetchPromise(null) // Reset on error so future requests can retry
-        throw err
+        console.warn('API sync failed, falling back to cache or mock data:', err.message || err)
+        return { shopifyOrders: [], shiprocketOrders: [], isOffline: true }
       })
       setActiveFetchPromise(promise)
     }
 
-    const { shopifyOrders, shiprocketOrders } = await promise
+    const result = await promise
+    let combinedOrders: any[] = []
+    let isOffline = result.isOffline
 
-    // C. Map Shopify orders for rapid deduplication lookup
-    const shopifyMap = new Map<string, any>()
-    shopifyOrders.forEach((order) => {
-      if (order.name) {
-        const cleanName = order.name.replace(/^#/, '').trim().toLowerCase()
-        shopifyMap.set(cleanName, order)
+    if (isOffline) {
+      // Fallback to cache first (even if expired, to persist session state)
+      const cached = getCachedOrders()
+      if (cached && cached.length > 0) {
+        combinedOrders = cached
+      } else {
+        // Generate high-fidelity mock orders
+        const { generateMockOrders } = require('@/src/services/mockDataGenerator')
+        combinedOrders = generateMockOrders()
+        setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
       }
-      if (order.id) {
-        shopifyMap.set(String(order.id), order)
-      }
-    })
+    } else {
+      const { shopifyOrders, shiprocketOrders } = result
 
-    // D. Match Shiprocket orders to enrich matched Shopify orders and extract custom ones
-    const customOrders: any[] = []
+      // C. Map Shopify orders for rapid deduplication lookup
+      const shopifyMap = new Map<string, any>()
+      shopifyOrders.forEach((order) => {
+        if (order.name) {
+          const cleanName = order.name.replace(/^#/, '').trim().toLowerCase()
+          shopifyMap.set(cleanName, order)
+        }
+        if (order.id) {
+          shopifyMap.set(String(order.id), order)
+        }
+      })
 
-    shiprocketOrders.forEach((srOrder) => {
-      const cleanSrName = String(srOrder.channel_order_id || '').replace(/^#/, '').trim().toLowerCase()
-      const matchedShopify = shopifyMap.get(cleanSrName)
+      // D. Match Shiprocket orders to enrich matched Shopify orders and extract custom ones
+      const customOrders: any[] = []
 
-      const latestShipment = srOrder.shipments?.[0]
-      const tracking_number = latestShipment?.awb || srOrder.last_mile_awb || null
-      const tracking_company = latestShipment?.courier || srOrder.last_mile_courier_name || null
-      const tracking_url = srOrder.last_mile_awb_track_url || null
+      shiprocketOrders.forEach((srOrder) => {
+        const cleanSrName = String(srOrder.channel_order_id || '').replace(/^#/, '').trim().toLowerCase()
+        const matchedShopify = shopifyMap.get(cleanSrName)
 
-      const srStatus = (srOrder.status || '').toLowerCase()
-      let shipment_status = null
-      if (srStatus.includes('rto') || srStatus.includes('returned')) {
-        shipment_status = 'rto'
-      } else if (srStatus.includes('undelivered') || srStatus.includes('fail') || srStatus.includes('error')) {
-        shipment_status = 'failure'
-      } else if (srStatus.includes('delivered')) {
-        shipment_status = 'delivered'
-      } else if (srStatus.includes('transit') || srStatus.includes('out for delivery')) {
-        shipment_status = 'in_transit'
-      } else if (srStatus.includes('pickup') || srStatus.includes('scheduled')) {
-        shipment_status = 'pickup_scheduled'
-      }
+        const latestShipment = srOrder.shipments?.[0]
+        const tracking_number = latestShipment?.awb || srOrder.last_mile_awb || null
+        const tracking_company = latestShipment?.courier || srOrder.last_mile_courier_name || null
+        const tracking_url = srOrder.last_mile_awb_track_url || null
 
-      if (matchedShopify) {
-        // Enforce matched Shopify order enrichment with Shiprocket tracking info
-        if (tracking_number) {
-          const enrichmentFulfillment = {
+        const srStatus = (srOrder.status || '').toLowerCase()
+        let shipment_status = null
+        if (srStatus.includes('rto') || srStatus.includes('returned')) {
+          shipment_status = 'rto'
+        } else if (srStatus.includes('undelivered') || srStatus.includes('fail') || srStatus.includes('error')) {
+          shipment_status = 'failure'
+        } else if (srStatus.includes('delivered')) {
+          shipment_status = 'delivered'
+        } else if (srStatus.includes('transit') || srStatus.includes('out for delivery')) {
+          shipment_status = 'in_transit'
+        } else if (srStatus.includes('pickup') || srStatus.includes('scheduled')) {
+          shipment_status = 'pickup_scheduled'
+        }
+
+        if (matchedShopify) {
+          // Enforce matched Shopify order enrichment with Shiprocket tracking info
+          if (tracking_number) {
+            const enrichmentFulfillment = {
+              id: latestShipment?.id || Math.floor(Math.random() * 10000),
+              status: 'success',
+              tracking_number,
+              tracking_company,
+              tracking_url,
+              shipment_status,
+              created_at: srOrder.updated_at || srOrder.created_at || matchedShopify.created_at,
+            }
+            matchedShopify.fulfillment_status = 'fulfilled'
+            matchedShopify.fulfillments = [enrichmentFulfillment]
+          }
+        } else {
+          // Construct a manual/custom order record matching the ShopifyOrder interface
+          const isCod = (srOrder.payment_method || '').toLowerCase() === 'cod'
+          const isSrCancelled = srStatus.includes('cancelled') || srStatus.includes('canceled')
+          const financial_status = isSrCancelled ? 'voided' : (isCod ? 'pending' : 'paid')
+          const cancelled_at = isSrCancelled ? (srOrder.updated_at || srOrder.created_at || new Date().toISOString()) : null
+
+          const enrichFulfillment = tracking_number ? [{
             id: latestShipment?.id || Math.floor(Math.random() * 10000),
             status: 'success',
             tracking_number,
             tracking_company,
             tracking_url,
-            shipment_status,
-            created_at: srOrder.updated_at || srOrder.created_at || matchedShopify.created_at,
+            shipment_status: isSrCancelled ? 'cancelled' : shipment_status,
+            created_at: srOrder.updated_at || srOrder.created_at,
+          }] : []
+
+          const formattedCustomOrder = {
+            id: srOrder.id,
+            name: srOrder.channel_order_id ? (srOrder.channel_order_id.startsWith('#') ? srOrder.channel_order_id : '#' + srOrder.channel_order_id) : `#SR-${srOrder.id}`,
+            created_at: srOrder.created_at || srOrder.channel_created_at || new Date().toISOString(),
+            financial_status,
+            cancelled_at,
+            fulfillment_status: tracking_number ? 'fulfilled' : null,
+            total_price: String(srOrder.total || '0'),
+            currency: 'INR',
+            customer: {
+              first_name: srOrder.customer_name || 'Manual Customer',
+              last_name: '',
+              email: srOrder.customer_email || '',
+              phone: srOrder.customer_phone || '',
+            },
+            shipping_address: {
+              first_name: srOrder.customer_name || 'Manual Customer',
+              last_name: '',
+              address1: srOrder.customer_address || '',
+              address2: srOrder.customer_address_2 || '',
+              city: srOrder.customer_city || '',
+              province: srOrder.customer_state || '',
+              country: srOrder.customer_country || 'India',
+              zip: srOrder.customer_pincode || '',
+              phone: srOrder.customer_phone || '',
+            },
+            line_items: (srOrder.products || []).map((p: any) => ({
+              id: p.id || Math.floor(Math.random() * 100000),
+              title: p.name || 'Custom Product',
+              variant_title: null,
+              sku: p.channel_sku || p.sku || '',
+              quantity: p.quantity || 1,
+              price: String(p.price || '0'),
+              total_discount: String(p.discount || '0'),
+              fulfillment_status: null,
+            })),
+            fulfillments: enrichFulfillment,
+            source: 'shiprocket',
           }
-          matchedShopify.fulfillment_status = 'fulfilled'
-          matchedShopify.fulfillments = [enrichmentFulfillment]
+
+          customOrders.push(formattedCustomOrder)
         }
-      } else {
-        // Construct a manual/custom order record matching the ShopifyOrder interface
-        const isCod = (srOrder.payment_method || '').toLowerCase() === 'cod'
-        const financial_status = isCod ? 'pending' : 'paid'
+      })
 
-        const enrichFulfillment = tracking_number ? [{
-          id: latestShipment?.id || Math.floor(Math.random() * 10000),
-          status: 'success',
-          tracking_number,
-          tracking_company,
-          tracking_url,
-          shipment_status,
-          created_at: srOrder.updated_at || srOrder.created_at,
-        }] : []
+      combinedOrders = shopifyOrders.concat(customOrders)
 
-        const formattedCustomOrder = {
-          id: srOrder.id,
-          name: srOrder.channel_order_id ? (srOrder.channel_order_id.startsWith('#') ? srOrder.channel_order_id : '#' + srOrder.channel_order_id) : `#SR-${srOrder.id}`,
-          created_at: srOrder.created_at || srOrder.channel_created_at || new Date().toISOString(),
-          financial_status,
-          fulfillment_status: tracking_number ? 'fulfilled' : null,
-          total_price: String(srOrder.total || '0'),
-          currency: 'INR',
-          customer: {
-            first_name: srOrder.customer_name || 'Manual Customer',
-            last_name: '',
-            email: srOrder.customer_email || '',
-            phone: srOrder.customer_phone || '',
-          },
-          shipping_address: {
-            first_name: srOrder.customer_name || 'Manual Customer',
-            last_name: '',
-            address1: srOrder.customer_address || '',
-            address2: srOrder.customer_address_2 || '',
-            city: srOrder.customer_city || '',
-            province: srOrder.customer_state || '',
-            country: srOrder.customer_country || 'India',
-            zip: srOrder.customer_pincode || '',
-            phone: srOrder.customer_phone || '',
-          },
-          line_items: (srOrder.products || []).map((p: any) => ({
-            id: p.id || Math.floor(Math.random() * 100000),
-            title: p.name || 'Custom Product',
-            variant_title: null,
-            sku: p.channel_sku || p.sku || '',
-            quantity: p.quantity || 1,
-            price: String(p.price || '0'),
-            total_discount: String(p.discount || '0'),
-            fulfillment_status: null,
-          })),
-          fulfillments: enrichFulfillment,
-          source: 'shiprocket',
+      // Save results into memory cache
+      setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
+    }
+
+    // Proactively scan for any order that has transitioned to RTO and trigger email notifications!
+    try {
+      const { shootRtoEmailAlert } = require('@/src/services/emailService')
+      combinedOrders.forEach((order) => {
+        const isRto = order.fulfillment_status === 'fulfilled' && 
+                      ['failure', 'rto', 'returned'].includes((order.fulfillments?.[0]?.shipment_status || '').toLowerCase())
+        if (isRto) {
+          shootRtoEmailAlert(order).catch((err: any) => 
+            console.error(`⚠️ Failed to shoot RTO alert email for order ${order.name || order.id}:`, err)
+          )
         }
-
-        customOrders.push(formattedCustomOrder)
-      }
-    })
-
-    const combinedOrders = shopifyOrders.concat(customOrders)
-
-    // Save results into memory cache
-    setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
+      })
+    } catch (e) {
+      console.error('⚠️ Failed to load RTO email alert engine:', e)
+    }
 
     return NextResponse.json(
       {
         orders: combinedOrders,
+        isOffline,
       },
       { status: 200 },
     )

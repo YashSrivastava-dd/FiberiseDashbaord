@@ -5,7 +5,7 @@ export let cachedOrders: any[] | null = null
 export let cacheExpiresAt = 0
 export const CACHE_TTL_MS = 15000 // 15 seconds in-memory cache
 
-export let activeFetchPromise: Promise<{ shopifyOrders: any[]; shiprocketOrders: any[] }> | null = null
+export let activeFetchPromise: Promise<{ shopifyOrders: any[]; shiprocketOrders: any[]; isOffline?: boolean }> | null = null
 
 export function getCachedOrders() {
   return cachedOrders
@@ -49,6 +49,6 @@ export function getActiveFetchPromise() {
   return activeFetchPromise
 }
 
-export function setActiveFetchPromise(p: Promise<{ shopifyOrders: any[]; shiprocketOrders: any[] }> | null) {
+export function setActiveFetchPromise(p: Promise<{ shopifyOrders: any[]; shiprocketOrders: any[]; isOffline?: boolean }> | null) {
   activeFetchPromise = p
 }

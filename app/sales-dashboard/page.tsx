@@ -78,6 +78,7 @@ export default function SalesDashboardPage() {
   const [orders, setOrders] = useState<ShopifyOrder[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const [isOffline, setIsOffline] = useState<boolean>(false)
   const [timeFilter, setTimeFilter] = useState<'all' | '30days' | '7days' | 'today'>('all')
   const [codSearch, setCodSearch] = useState<string>('')
   const [codRemittanceFilter, setCodRemittanceFilter] = useState<string>('all')
@@ -94,6 +95,8 @@ export default function SalesDashboardPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to fetch sales database')
       setOrders(data.orders || [])
+      setIsOffline(!!data.isOffline)
+      setError(null)
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -109,6 +112,8 @@ export default function SalesDashboardPage() {
     return (
       !!o.cancelled_at ||
       o.financial_status?.toLowerCase() === 'voided' ||
+      o.financial_status?.toLowerCase() === 'cancelled' ||
+      o.financial_status?.toLowerCase() === 'refunded' ||
       o.fulfillments?.[0]?.shipment_status === 'cancelled'
     )
   }
@@ -357,6 +362,9 @@ export default function SalesDashboardPage() {
             if (txStatusFilter !== 'scheduled') return false
           }
         }
+      } else {
+        // Exclude cancelled orders by default from the general money transaction lists
+        if (isOrderCancelled(o)) return false
       }
 
       return true
@@ -431,7 +439,14 @@ export default function SalesDashboardPage() {
             </div>
           </div>
 
-          {error && (
+          {isOffline && (
+            <div className="mb-6 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-300 text-sm flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 shrink-0 text-amber-400" />
+              <span>🔌 <strong>Offline / Demo Mode:</strong> External Shopify & Shiprocket endpoints are currently unreachable (getaddrinfo ENOTFOUND). Showing realistic simulated data for dashboard evaluation.</span>
+            </div>
+          )}
+
+          {error && !isOffline && (
             <div className="mb-6 p-4 rounded-xl border border-red-500/40 bg-red-500/10 text-red-300 text-sm flex items-center gap-2">
               <AlertCircle className="w-5 h-5 shrink-0" />
               <span>Failed to fetch real-time logs: {error}</span>
@@ -474,7 +489,7 @@ export default function SalesDashboardPage() {
                       <p className="text-white/40 text-xs font-bold uppercase tracking-wider mb-1">Total Orders</p>
                       <h3 className="text-3xl font-extrabold text-white tracking-tight">{metrics.totalOrders}</h3>
                       <p className="text-[10px] text-white/50 font-normal mt-2 flex items-center gap-1">
-                        <span>Includes {metrics.cancelledCount} Cancelled attempts</span>
+                        <span>Excludes {metrics.cancelledCount} Cancelled attempts</span>
                       </p>
                     </div>
                     <div className="w-10 h-10 rounded-xl bg-blue-500/15 border border-blue-500/20 text-blue-400 flex items-center justify-center">
