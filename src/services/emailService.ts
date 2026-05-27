@@ -27,13 +27,13 @@ function markOrderAsNotified(orderId: string): void {
   try {
     const notified = getNotifiedOrders();
     notified.add(String(orderId));
-    
+
     // Ensure parent directories exist
     const dir = path.dirname(LOG_FILE_PATH);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    
+
     fs.writeFileSync(LOG_FILE_PATH, JSON.stringify(Array.from(notified), null, 2), 'utf-8');
   } catch (error) {
     console.error('⚠️ Failed to update RTO notified orders registry:', error);
@@ -95,9 +95,9 @@ export async function shootRtoEmailAlert(order: any): Promise<boolean> {
   const smtpUser = process.env.BREVO_SMTP_USER;
   const smtpKey = process.env.BREVO_SMTP_KEY;
 
-  const hasCredentials = smtpUser && smtpKey && 
-                         smtpUser !== 'your_brevo_login_email_here' && 
-                         smtpKey !== 'your_brevo_smtp_key_here';
+  const hasCredentials = smtpUser && smtpKey &&
+    smtpUser !== 'your_brevo_login_email_here' &&
+    smtpKey !== 'your_brevo_smtp_key_here';
 
   if (hasCredentials) {
     const htmlBody = `
@@ -105,7 +105,7 @@ export async function shootRtoEmailAlert(order: any): Promise<boolean> {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>🚨 URGENT RTO ALERT: ${orderName}</title>
+        <title>RTO ALERT: ${orderName}</title>
       </head>
       <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #07090e; color: #e2e8f0;">
         <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #0e121a; border-radius: 16px; overflow: hidden; margin-top: 40px; margin-bottom: 40px; border: 1px solid #e53e3e;">
