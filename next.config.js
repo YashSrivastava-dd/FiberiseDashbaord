@@ -16,9 +16,7 @@ const nextConfig = {
   },
   
   // Experimental features for better performance
-  experimental: {
-    optimizeCss: true,
-  },
+  experimental: {},
   
   webpack: (config, { isServer, dev }) => {
     // Fix for mapbox-gl
