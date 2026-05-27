@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import admin from 'firebase-admin'
 import { getFirebaseAdmin } from '@/src/firebase/firebase.config'
 import { hashPassword, encryptSession, seedAdminUser } from '@/src/services/auth'
+import { logAction } from '@/src/services/auditLogService'
 
 export async function POST(req: NextRequest) {
   try {
@@ -74,6 +75,15 @@ export async function POST(req: NextRequest) {
       path: '/',
       maxAge: 24 * 60 * 60, // 24 hours in seconds
     })
+
+    // Log audit trail event
+    await logAction(
+      userDoc.id,
+      userData.email,
+      'USER_LOGIN',
+      { role: userData.role || 'user' },
+      req
+    )
 
     return res
   } catch (error: any) {

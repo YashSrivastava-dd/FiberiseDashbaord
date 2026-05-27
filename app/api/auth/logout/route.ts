@@ -1,9 +1,27 @@
 export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
+import { decryptSession } from '@/src/services/auth'
+import { logAction } from '@/src/services/auditLogService'
 
 export async function POST(_req: NextRequest) {
   try {
+    const sessionCookie = _req.cookies.get('fiberise_session')?.value
+    let session = null
+    if (sessionCookie) {
+      session = decryptSession(sessionCookie)
+    }
+
+    if (session) {
+      await logAction(
+        session.email,
+        session.email,
+        'USER_LOGOUT',
+        { role: session.role || 'user' },
+        _req
+      )
+    }
+
     const res = NextResponse.json({ success: true }, { status: 200 })
 
     const protocol = _req.headers.get('x-forwarded-proto') || _req.nextUrl.protocol
@@ -26,6 +44,7 @@ export async function POST(_req: NextRequest) {
     )
   }
 }
+
 export async function GET(req: NextRequest) {
   // Support GET redirect or plain GET logouts
   return POST(req)

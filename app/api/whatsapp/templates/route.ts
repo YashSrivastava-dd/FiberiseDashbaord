@@ -14,6 +14,17 @@ import {
   updateTemplate,
   deleteTemplate,
 } from '@/src/services/firestore.service';
+import { decryptSession } from '@/src/services/auth';
+import { logAction } from '@/src/services/auditLogService';
+
+function getSessionInfo(req: NextRequest) {
+  const sessionCookie = req.cookies.get('fiberise_session')?.value;
+  const session = sessionCookie ? decryptSession(sessionCookie) : null;
+  return {
+    email: session?.email || 'system@fiberisefit.com',
+    userId: session?.email || 'system',
+  };
+}
 
 export async function GET() {
   try {
@@ -51,6 +62,16 @@ export async function POST(req: NextRequest) {
       active: active !== false, // Default to true
     });
 
+    // Trace action
+    const { userId, email } = getSessionInfo(req);
+    await logAction(
+      userId,
+      email,
+      'CREATE_TEMPLATE',
+      { id, templateName, dayNumber: Number(dayNumber), campaignName },
+      req
+    );
+
     return NextResponse.json(
       { success: true, id, templateName, dayNumber },
       { status: 201 }
@@ -83,6 +104,16 @@ export async function PATCH(req: NextRequest) {
 
     await updateTemplate(templateId, updates);
 
+    // Trace action
+    const { userId, email } = getSessionInfo(req);
+    await logAction(
+      userId,
+      email,
+      'UPDATE_TEMPLATE',
+      { templateId, updates },
+      req
+    );
+
     return NextResponse.json(
       { success: true, templateId },
       { status: 200 }
@@ -109,6 +140,16 @@ export async function DELETE(req: NextRequest) {
     }
 
     await deleteTemplate(templateId);
+
+    // Trace action
+    const { userId, email } = getSessionInfo(req);
+    await logAction(
+      userId,
+      email,
+      'DELETE_TEMPLATE',
+      { templateId },
+      req
+    );
 
     return NextResponse.json(
       { success: true, deleted: templateId },

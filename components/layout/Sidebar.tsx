@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus, MessageCircle, LogOut, TrendingUp } from 'lucide-react'
+import { LayoutDashboard, Bell, ShoppingBag, Ticket, PackagePlus, MessageCircle, LogOut, TrendingUp, ShieldCheck } from 'lucide-react'
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', href: '/' },
@@ -14,6 +14,7 @@ const menuItems = [
   { icon: MessageCircle, label: 'WhatsApp', href: '/whatsapp' },
   { icon: Ticket, label: 'Support Tickets', href: '/tickets' },
   { icon: Bell, label: 'Advertisements', href: '/notifications' },
+  { icon: ShieldCheck, label: 'Audit Logs', href: '/audit-logs' },
 ]
 
 export function Sidebar() {

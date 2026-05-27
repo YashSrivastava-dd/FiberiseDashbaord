@@ -11,7 +11,6 @@ export function middleware(req: NextRequest) {
     pathname.startsWith('/static/') ||
     pathname.startsWith('/api/auth/login') ||
     pathname.startsWith('/api/auth/logout') ||
-    pathname.startsWith('/api/test-email') ||
     pathname === '/login' ||
     pathname === '/favicon.ico'
   ) {
