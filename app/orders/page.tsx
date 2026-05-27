@@ -319,11 +319,11 @@ export default function ShiprocketDashboardPage() {
     const fetchOrders = async () => {
       try {
         setLoading(true)
-        const res = await fetch('/api/shopify/orders')
+        // 1. Fetch first chunk (50 orders) for instant loading
+        const res = await fetch('/api/shopify/orders?limit=50')
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Failed to fetch Shopify orders')
 
-        // We preserve real order data and fulfillments fetched from Shopify & Shiprocket
         const enriched: ShopifyOrder[] = (data.orders || []).map((o: any) => {
           return {
             ...o,
@@ -335,9 +335,29 @@ export default function ShiprocketDashboardPage() {
         setOrders(enriched)
         setIsOffline(!!data.isOffline)
         setError(null)
+        setLoading(false) // Complete initial loading state immediately!
+
+        // 2. Fetch the remaining/all orders in the background silently
+        fetch('/api/shopify/orders')
+          .then(async (backgroundRes) => {
+            if (backgroundRes.ok) {
+              const backgroundData = await backgroundRes.json()
+              if (backgroundData.orders) {
+                const backgroundEnriched: ShopifyOrder[] = backgroundData.orders.map((o: any) => {
+                  return {
+                    ...o,
+                    fulfillment_status: o.fulfillment_status || null,
+                    fulfillments: o.fulfillments || []
+                  }
+                })
+                setOrders(backgroundEnriched)
+              }
+            }
+          })
+          .catch((err) => console.warn('Background full order fetch failed:', err))
+
       } catch (err: any) {
         setError(err.message)
-      } finally {
         setLoading(false)
       }
     }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
@@ -32,6 +32,27 @@ export function Sidebar() {
     }
   }
 
+  useEffect(() => {
+    const isCollapsed = localStorage.getItem('sidebar_collapsed') === 'true'
+    setCollapsed(isCollapsed)
+    if (isCollapsed) {
+      document.documentElement.setAttribute('data-sidebar-collapsed', 'true')
+    } else {
+      document.documentElement.removeAttribute('data-sidebar-collapsed')
+    }
+  }, [])
+
+  const handleToggle = () => {
+    const nextCollapsed = !collapsed
+    setCollapsed(nextCollapsed)
+    localStorage.setItem('sidebar_collapsed', String(nextCollapsed))
+    if (nextCollapsed) {
+      document.documentElement.setAttribute('data-sidebar-collapsed', 'true')
+    } else {
+      document.documentElement.removeAttribute('data-sidebar-collapsed')
+    }
+  }
+
   return (
     <aside
       className={cn(
@@ -48,7 +69,7 @@ export function Sidebar() {
             </div>
           )}
           <button
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={handleToggle}
             className="text-white/60 hover:text-white transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

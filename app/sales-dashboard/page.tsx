@@ -88,10 +88,11 @@ export default function SalesDashboardPage() {
   const [txPaymentFilter, setTxPaymentFilter] = useState<string>('all')
   const [txStatusFilter, setTxStatusFilter] = useState<string>('all')
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (forceRefresh: boolean = false) => {
     try {
       setLoading(true)
-      const res = await fetch('/api/shopify/orders?refresh=true')
+      const url = forceRefresh ? '/api/shopify/orders?refresh=true' : '/api/shopify/orders'
+      const res = await fetch(url)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to fetch sales database')
       setOrders(data.orders || [])
@@ -105,7 +106,7 @@ export default function SalesDashboardPage() {
   }
 
   useEffect(() => {
-    fetchOrders()
+    fetchOrders(false) // Initial load: instant load from cache!
   }, [])
 
   const isOrderCancelled = (o: ShopifyOrder): boolean => {
@@ -429,7 +430,7 @@ export default function SalesDashboardPage() {
               </div>
 
               <button
-                onClick={fetchOrders}
+                onClick={() => fetchOrders(true)}
                 disabled={loading}
                 className="p-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-white/80 active:scale-95 transition-all"
                 title="Refresh Live Data"

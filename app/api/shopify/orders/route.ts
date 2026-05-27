@@ -20,9 +20,10 @@ import {
 } from '@/src/services/ordersCache'
 
 // Reusable helper to fetch all Shopify orders (handles pagination loop)
-async function fetchAllShopifyOrders(): Promise<any[]> {
+async function fetchAllShopifyOrders(limit: number | null = null): Promise<any[]> {
   let shopifyOrders: any[] = []
-  let nextUrl: string | null = `https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders.json?limit=250&status=any`
+  const fetchLimit = limit ? Math.min(limit, 250) : 250
+  let nextUrl: string | null = `https://${SHOP_DOMAIN}/admin/api/${API_VERSION}/orders.json?limit=${fetchLimit}&status=any`
   
   while (nextUrl) {
     const res: Response = await fetch(nextUrl, {
@@ -44,6 +45,11 @@ async function fetchAllShopifyOrders(): Promise<any[]> {
       shopifyOrders = shopifyOrders.concat(data.orders)
     }
 
+    // If we have a limit and we've reached or exceeded it, we stop!
+    if (limit && shopifyOrders.length >= limit) {
+      break
+    }
+
     const linkHeader: string | null = res.headers.get('Link') || res.headers.get('link')
     nextUrl = null
     if (linkHeader) {
@@ -53,7 +59,7 @@ async function fetchAllShopifyOrders(): Promise<any[]> {
       }
     }
   }
-  return shopifyOrders
+  return limit ? shopifyOrders.slice(0, limit) : shopifyOrders
 }
 
 export async function GET(_req: NextRequest) {
@@ -70,6 +76,8 @@ export async function GET(_req: NextRequest) {
 
     const { searchParams } = new URL(_req.url)
     const forceRefresh = searchParams.get('refresh') === 'true'
+    const limitParam = searchParams.get('limit')
+    const limit = limitParam ? parseInt(limitParam) : null
 
     // A. Check in-memory cache for instant loads
     const now = Date.now()
@@ -77,26 +85,40 @@ export async function GET(_req: NextRequest) {
     const expiresAt = getCacheExpiresAt()
     if (!forceRefresh && cached && now < expiresAt) {
       return NextResponse.json(
-        { orders: cached },
+        { orders: limit ? cached.slice(0, limit) : cached },
         { status: 200 },
       )
     }
 
     // B. Fetch Shopify and Shiprocket concurrently in parallel with deduplication!
-    let promise = getActiveFetchPromise()
-    if (!promise) {
+    let promise
+    if (limit) {
+      // Direct fast fetch for limited list
       promise = Promise.all([
-        fetchAllShopifyOrders(),
+        fetchAllShopifyOrders(limit),
         getAllShiprocketOrders()
       ]).then(([shopify, shiprocket]) => {
-        setActiveFetchPromise(null) // Reset when completed
         return { shopifyOrders: shopify, shiprocketOrders: shiprocket, isOffline: false }
       }).catch((err) => {
-        setActiveFetchPromise(null) // Reset on error so future requests can retry
-        console.warn('API sync failed, falling back to cache or mock data:', err.message || err)
+        console.warn('Limited API sync failed, falling back to cache or mock data:', err.message || err)
         return { shopifyOrders: [], shiprocketOrders: [], isOffline: true }
       })
-      setActiveFetchPromise(promise)
+    } else {
+      promise = getActiveFetchPromise()
+      if (!promise) {
+        promise = Promise.all([
+          fetchAllShopifyOrders(),
+          getAllShiprocketOrders()
+        ]).then(([shopify, shiprocket]) => {
+          setActiveFetchPromise(null) // Reset when completed
+          return { shopifyOrders: shopify, shiprocketOrders: shiprocket, isOffline: false }
+        }).catch((err) => {
+          setActiveFetchPromise(null) // Reset on error so future requests can retry
+          console.warn('API sync failed, falling back to cache or mock data:', err.message || err)
+          return { shopifyOrders: [], shiprocketOrders: [], isOffline: true }
+        })
+        setActiveFetchPromise(promise)
+      }
     }
 
     const result = await promise
@@ -107,12 +129,15 @@ export async function GET(_req: NextRequest) {
       // Fallback to cache first (even if expired, to persist session state)
       const cached = getCachedOrders()
       if (cached && cached.length > 0) {
-        combinedOrders = cached
+        combinedOrders = limit ? cached.slice(0, limit) : cached
       } else {
         // Generate high-fidelity mock orders
         const { generateMockOrders } = require('@/src/services/mockDataGenerator')
         combinedOrders = generateMockOrders()
         setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
+        if (limit) {
+          combinedOrders = combinedOrders.slice(0, limit)
+        }
       }
     } else {
       const { shopifyOrders, shiprocketOrders } = result
@@ -170,7 +195,7 @@ export async function GET(_req: NextRequest) {
             matchedShopify.fulfillment_status = 'fulfilled'
             matchedShopify.fulfillments = [enrichmentFulfillment]
           }
-        } else {
+        } else if (!limit) {
           // Construct a manual/custom order record matching the ShopifyOrder interface
           const isCod = (srOrder.payment_method || '').toLowerCase() === 'cod'
           const isSrCancelled = srStatus.includes('cancelled') || srStatus.includes('canceled')
@@ -233,8 +258,10 @@ export async function GET(_req: NextRequest) {
 
       combinedOrders = shopifyOrders.concat(customOrders)
 
-      // Save results into memory cache
-      setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
+      // Save results into memory cache only for full sync
+      if (!limit) {
+        setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
+      }
     }
 
     // Proactively scan for any order that has transitioned to RTO and trigger email notifications!
