@@ -224,46 +224,75 @@ export default function AuditLogsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5 text-sm">
-                    {filteredLogs.map((log) => (
-                      <tr 
-                        key={log.id} 
-                        className="hover:bg-white/2 transition-colors duration-150 group"
-                      >
-                        {/* Timestamp */}
-                        <td className="px-6 py-4 text-slate-300 font-mono text-xs whitespace-nowrap">
-                          {formatDate(log.timestamp)}
-                        </td>
+                    {filteredLogs.map((log) => {
+                      const isSuperAdminLog = log.userEmail === 'superadmin@fiberisefit.com' || (log.details && log.details.role === 'super_admin');
+                      return (
+                        <tr 
+                          key={log.id} 
+                          className={`transition-colors duration-150 group ${
+                            isSuperAdminLog 
+                              ? 'bg-gradient-to-r from-red-500/[0.03] to-transparent hover:from-red-500/[0.06]' 
+                              : 'hover:bg-white/2'
+                          }`}
+                        >
+                          {/* Timestamp */}
+                          <td className={`px-6 py-4 text-slate-300 font-mono text-xs whitespace-nowrap ${
+                            isSuperAdminLog 
+                              ? 'border-l-4 border-l-red-500/70 shadow-[inset_3px_0_0_0_rgba(239,68,68,0.2)] bg-red-950/[0.05]' 
+                              : ''
+                          }`}>
+                            {formatDate(log.timestamp)}
+                          </td>
 
-                        {/* User Identity */}
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex flex-col">
-                            <span className="font-medium text-white">{log.userEmail}</span>
-                            <span className="text-[10px] text-slate-500 font-mono">ID: {log.userId.slice(0, 8)}...</span>
-                          </div>
-                        </td>
+                          {/* User Identity */}
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex flex-col">
+                              <span className={`font-medium ${isSuperAdminLog ? 'text-red-200 font-semibold' : 'text-white'}`}>
+                                {log.userEmail}
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-mono">ID: {log.userId.slice(0, 8)}...</span>
+                              {isSuperAdminLog && (
+                                <span className="inline-flex items-center gap-1.5 mt-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-red-500/10 text-red-400 border border-red-500/25 w-fit select-none font-mono shadow-[0_0_8px_rgba(239,68,68,0.15)]">
+                                  <span className="relative flex h-1.5 w-1.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500"></span>
+                                  </span>
+                                  IP TRACE ACTIVE
+                                </span>
+                              )}
+                            </div>
+                          </td>
 
-                        {/* Action Event Badge */}
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono border ${getActionBadgeStyle(log.actionType)}`}>
-                            {log.actionType}
-                          </span>
-                        </td>
-
-                        {/* Network Metadata (IP / Agent) */}
-                        <td className="px-6 py-4 max-w-xs truncate">
-                          <div className="flex flex-col gap-0.5 text-xs text-slate-400">
-                            <span className="font-mono flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                              {log.ipAddress || 'N/A'}
+                          {/* Action Event Badge */}
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono border ${
+                              isSuperAdminLog 
+                                ? 'bg-red-500/10 text-red-400 border-red-500/25 shadow-[0_0_6px_rgba(239,68,68,0.05)]' 
+                                : getActionBadgeStyle(log.actionType)
+                            }`}>
+                              {log.actionType}
                             </span>
-                            <span className="text-[10px] text-slate-500 truncate flex items-center gap-1" title={log.userAgent}>
-                              <Smartphone className="w-3 h-3 flex-shrink-0" />
-                              {log.userAgent || 'System'}
-                            </span>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* Payload Inspection Trigger */}
+                          {/* Network Metadata (IP / Agent) */}
+                          <td className="px-6 py-4 max-w-xs truncate">
+                            <div className="flex flex-col gap-0.5 text-xs text-slate-400">
+                              <span className={`font-mono flex items-center gap-1.5 ${isSuperAdminLog ? 'text-red-200' : ''}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  isSuperAdminLog 
+                                    ? 'bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.6)]' 
+                                    : 'bg-blue-500'
+                                }`}></span>
+                                {log.ipAddress || 'N/A'}
+                              </span>
+                              <span className="text-[10px] text-slate-500 truncate flex items-center gap-1" title={log.userAgent}>
+                                <Smartphone className="w-3 h-3 flex-shrink-0" />
+                                {log.userAgent || 'System'}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Payload Inspection Trigger */}
                         <td className="px-6 py-4 text-right whitespace-nowrap">
                           <button
                             onClick={() => setInspectLog(log)}
@@ -274,7 +303,7 @@ export default function AuditLogsPage() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>

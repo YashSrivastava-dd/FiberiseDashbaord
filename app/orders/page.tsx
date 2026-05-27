@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TopBar } from '@/components/layout/TopBar'
@@ -155,9 +155,18 @@ export default function ShiprocketDashboardPage() {
   const [currentTab, setCurrentTab] = useState<'new' | 'ready_to_ship' | 'pickups_manifests' | 'in_transit' | 'delivered' | 'rto' | 'cancelled' | 'all'>('new')
   const [manifestSubtab, setManifestSubtab] = useState<'pickup_ids' | 'manifests'>('pickup_ids')
 
-  // Pagination State
+  // Pagination State (server-side)
   const [currentPage, setCurrentPage] = useState<number>(1)
-  const ORDERS_PER_PAGE = 50
+  const ORDERS_PER_PAGE = 20
+  const [totalOrders, setTotalOrders] = useState<number>(0)
+  const [totalPages, setTotalPages] = useState<number>(1)
+  const [serverTabCounts, setServerTabCounts] = useState<Record<string, number>>({
+    new: 0, ready_to_ship: 0, pickups_manifests: 0, in_transit: 0,
+    delivered: 0, rto: 0, cancelled: 0, all: 0
+  })
+  const [pageLoading, setPageLoading] = useState<boolean>(false)
+  const [syncing, setSyncing] = useState<boolean>(false)
+  const syncTimeoutRef = useRef<any>(null)
 
   // Search & Basic Sorting States
   const [searchQuery, setSearchQuery] = useState<string>('')
@@ -202,6 +211,7 @@ export default function ShiprocketDashboardPage() {
   const [activeTrackingOrder, setActiveTrackingOrder] = useState<ShopifyOrder | null>(null)
   const [activeRtoRiskOrder, setActiveRtoRiskOrder] = useState<ShopifyOrder | null>(null)
   const [activeDetailOrder, setActiveDetailOrder] = useState<ShopifyOrder | null>(null)
+  const [drawerPhoneRevealed, setDrawerPhoneRevealed] = useState<boolean>(false)
   const [activeDropdownOrderId, setActiveDropdownOrderId] = useState<number | null>(null)
 
   const handleCloneOrder = async (order: ShopifyOrder) => {
@@ -261,20 +271,43 @@ export default function ShiprocketDashboardPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to create order on Shiprocket')
 
-      // Prepend the new cloned order to the frontend state
+      // Use the phone returned by the API (echoed back from the payload) as the definitive value
+      const confirmedPhone = data.billing_phone || sanitizedPhone
+
+      // Build the cloned order object to optimistically show it in the UI immediately.
+      // Always use confirmedPhone directly — Shopify API often masks/omits phone in list responses.
       const clonedOrder: ShopifyOrder = {
         ...order,
         id: data.order_id || Math.floor(1000000 + Math.random() * 9000000),
         name: `#${clonedName}`,
+        customer: {
+          first_name: order.customer?.first_name || order.shipping_address?.first_name || 'Guest',
+          last_name: order.customer?.last_name || order.shipping_address?.last_name || '',
+          email: order.customer?.email || 'customer@example.com',
+          phone: confirmedPhone,
+        },
+        shipping_address: order.shipping_address ? {
+          ...order.shipping_address,
+          phone: confirmedPhone,
+        } : {
+          phone: confirmedPhone
+        },
         created_at: new Date().toISOString(),
         fulfillment_status: null,
         fulfillments: [],
         cancelled_at: null,
       }
 
+      // Optimistically prepend the clone to local state and switch to All tab
       setOrders((prev) => [clonedOrder, ...prev])
-      setCurrentTab('new')
-      triggerNotification('success', `Order cloned successfully to Shiprocket & New Dispatches!`)
+      setCurrentTab('all')
+      setCurrentPage(1)
+      triggerNotification('success', `Order cloned successfully! Showing in All Orders.`)
+
+      // After 800ms, re-fetch page 1 from server to sync the injected cache entry
+      setTimeout(() => {
+        fetchOrdersPage(1, false)
+      }, 800)
     } catch (err: any) {
       triggerNotification('error', `Failed to sync clone to Shiprocket: ${err.message}`)
     }
@@ -314,54 +347,159 @@ export default function ShiprocketDashboardPage() {
     { id: 'xpressbees', name: 'Xpressbees Air', rate: 46, edd: '21 May 2026 (3 Days)', rating: 4.4 }
   ]
 
-  // ── Fetch Shopify Orders ──
-  useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        setLoading(true)
-        // 1. Fetch first chunk (50 orders) for instant loading
-        const res = await fetch('/api/shopify/orders?limit=50')
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Failed to fetch Shopify orders')
+  // ── Fetch Paginated Orders ──
+  const fetchPageRef = useRef<AbortController | null>(null)
 
-        const enriched: ShopifyOrder[] = (data.orders || []).map((o: any) => {
-          return {
-            ...o,
-            fulfillment_status: o.fulfillment_status || null,
-            fulfillments: o.fulfillments || []
-          }
-        })
+  const fetchOrdersPage = useCallback(async (page: number, isInitial = false) => {
+    // Abort any in-flight page request
+    if (fetchPageRef.current) {
+      fetchPageRef.current.abort()
+    }
+    const controller = new AbortController()
+    fetchPageRef.current = controller
 
-        setOrders(enriched)
-        setIsOffline(!!data.isOffline)
+    // Clear any pending sync retry timeout
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current)
+      syncTimeoutRef.current = null
+    }
+
+    try {
+      if (isInitial) setLoading(true)
+      else setPageLoading(true)
+
+      // Build url search params containing page, size, tab, and advanced filters
+      const queryParams = new URLSearchParams({
+        page: String(page),
+        per_page: String(ORDERS_PER_PAGE),
+        tab: currentTab,
+      })
+
+      if (searchQuery) queryParams.set('search', searchQuery)
+      if (financialFilter !== 'all') queryParams.set('financial', financialFilter)
+      if (filterPaymentType !== 'all') queryParams.set('payment', filterPaymentType)
+      if (filterChannel !== 'all') queryParams.set('channel', filterChannel)
+      if (filterCourier !== 'all') queryParams.set('courier', filterCourier)
+      if (filterPickupLocation !== 'all') queryParams.set('pickup', filterPickupLocation)
+      if (filterWeightClass !== 'all') queryParams.set('weight', filterWeightClass)
+      if (filterRtoRisk !== 'all') queryParams.set('rto', filterRtoRisk)
+      if (minPrice) queryParams.set('min_price', minPrice)
+      if (maxPrice) queryParams.set('max_price', maxPrice)
+      if (datePreset !== 'all') queryParams.set('date_preset', datePreset)
+      if (startDate) queryParams.set('start_date', startDate)
+      if (endDate) queryParams.set('end_date', endDate)
+      if (filterFulfillmentStatus !== 'all') queryParams.set('fulfillment', filterFulfillmentStatus)
+
+      const res = await fetch(`/api/shopify/orders?${queryParams.toString()}`, {
+        signal: controller.signal
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch Shopify orders')
+
+      if (data.syncing) {
+        setSyncing(true)
         setError(null)
-        setLoading(false) // Complete initial loading state immediately!
+        // Keep loading indicators true and reschedule fetch in 2s
+        syncTimeoutRef.current = setTimeout(() => {
+          fetchOrdersPage(page, isInitial)
+        }, 2000)
+        return
+      }
 
-        // 2. Fetch the remaining/all orders in the background silently
-        fetch('/api/shopify/orders')
-          .then(async (backgroundRes) => {
-            if (backgroundRes.ok) {
-              const backgroundData = await backgroundRes.json()
-              if (backgroundData.orders) {
-                const backgroundEnriched: ShopifyOrder[] = backgroundData.orders.map((o: any) => {
-                  return {
-                    ...o,
-                    fulfillment_status: o.fulfillment_status || null,
-                    fulfillments: o.fulfillments || []
-                  }
-                })
-                setOrders(backgroundEnriched)
-              }
-            }
-          })
-          .catch((err) => console.warn('Background full order fetch failed:', err))
+      setSyncing(false)
 
-      } catch (err: any) {
-        setError(err.message)
+      const enriched: ShopifyOrder[] = (data.orders || []).map((o: any) => ({
+        ...o,
+        fulfillment_status: o.fulfillment_status || null,
+        fulfillments: o.fulfillments || []
+      }))
+
+      setOrders(enriched)
+      setIsOffline(!!data.isOffline)
+      setError(null)
+
+      // Store server pagination metadata
+      if (data.pagination) {
+        setTotalOrders(data.pagination.total)
+        setTotalPages(data.pagination.total_pages)
+      }
+
+      // Store server-computed tab counts
+      if (data.tabCounts) {
+        setServerTabCounts(data.tabCounts)
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') return // Ignore aborted requests
+      setError(err.message)
+      setSyncing(false)
+    } finally {
+      if (!syncTimeoutRef.current) {
         setLoading(false)
+        setPageLoading(false)
       }
     }
-    fetchOrders()
+  }, [
+    ORDERS_PER_PAGE,
+    currentTab,
+    searchQuery,
+    financialFilter,
+    filterPaymentType,
+    filterChannel,
+    filterCourier,
+    filterPickupLocation,
+    filterWeightClass,
+    filterRtoRisk,
+    minPrice,
+    maxPrice,
+    datePreset,
+    startDate,
+    endDate,
+    filterFulfillmentStatus,
+  ])
+
+  // Initial load
+  useEffect(() => {
+    fetchOrdersPage(1, true)
+  }, [])
+
+  // Refetch when page changes (not on initial mount)
+  const isInitialMount = useRef(true)
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
+    fetchOrdersPage(currentPage)
+  }, [currentPage, fetchOrdersPage])
+
+  // Reset currentPage to 1 when filters or tab change to prevent out-of-bounds pagination
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [
+    currentTab,
+    searchQuery,
+    financialFilter,
+    filterPaymentType,
+    filterChannel,
+    filterCourier,
+    filterPickupLocation,
+    filterWeightClass,
+    filterRtoRisk,
+    minPrice,
+    maxPrice,
+    datePreset,
+    startDate,
+    endDate,
+    filterFulfillmentStatus,
+  ])
+
+  // Component unmount cleanup
+  useEffect(() => {
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current)
+      }
+    }
   }, [])
 
   // ─── Live Event Listeners for Incoming Shopify Orders ───
@@ -418,7 +556,6 @@ export default function ShiprocketDashboardPage() {
   useEffect(() => {
     setCurrentPage(1)
   }, [
-    currentTab,
     searchQuery,
     sortOrder,
     datePreset,
@@ -761,60 +898,8 @@ export default function ShiprocketDashboardPage() {
     return true
   })
 
-  // Group into Tab lists dynamically
-  const ordersTabLists = {
-    new: filteredOrders.filter(o => {
-      if (isOrderCancelled(o)) return false
-      if (!o.fulfillment_status || o.fulfillment_status === 'unfulfilled') {
-        const ageInMs = Date.now() - new Date(o.created_at).getTime()
-        const ageInDays = ageInMs / (1000 * 60 * 60 * 24)
-        return ageInDays <= 2 // Only show new orders created within the last 2 days
-      }
-      return false
-    }),
-    ready_to_ship: filteredOrders.filter(o => {
-      if (isOrderCancelled(o)) return false
-      if (o.fulfillment_status === 'fulfilled') {
-        const latest = o.fulfillments?.[0]
-        const status = (latest?.shipment_status || '').toLowerCase()
-        return !['in_transit', 'out_for_delivery', 'delivered', 'failure', 'attempted_delivery', 'rto', 'returned'].includes(status)
-      }
-      return false
-    }),
-    pickups_manifests: filteredOrders.filter(o => !isOrderCancelled(o)), // Special rendered view tab
-    in_transit: filteredOrders.filter(o => {
-      if (isOrderCancelled(o)) return false
-      if (o.fulfillment_status === 'fulfilled') {
-        const latest = o.fulfillments?.[0]
-        const status = (latest?.shipment_status || '').toLowerCase()
-        return ['in_transit', 'out_for_delivery', 'attempted_delivery'].includes(status)
-      }
-      return false
-    }),
-    delivered: filteredOrders.filter(o => {
-      if (isOrderCancelled(o)) return false
-      if (o.fulfillment_status === 'fulfilled') {
-        const latest = o.fulfillments?.[0]
-        const status = (latest?.shipment_status || '').toLowerCase()
-        return status === 'delivered'
-      }
-      return false
-    }),
-    rto: filteredOrders.filter(o => {
-      if (isOrderCancelled(o)) return false
-      if (o.fulfillment_status === 'fulfilled') {
-        const latest = o.fulfillments?.[0]
-        const status = (latest?.shipment_status || '').toLowerCase()
-        return ['failure', 'rto', 'returned'].includes(status)
-      }
-      return false
-    }),
-    cancelled: filteredOrders.filter(o => isOrderCancelled(o)),
-    all: filteredOrders
-  }
-
-  // Sorted list for currently active tab
-  const activeTabOrders = (ordersTabLists[currentTab] || [])
+  // Orders are already paginated from server; apply client-side filtering/sorting for the current page
+  const paginatedOrders = filteredOrders
     .sort((a, b) => {
       if (currentTab === 'rto') {
         const dateA = new Date(a.fulfillments?.[0]?.created_at || a.created_at).getTime()
@@ -826,11 +911,9 @@ export default function ShiprocketDashboardPage() {
       return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
     })
 
-  // Slicing for client-side pagination (50 orders per page)
+  // Server-driven pagination metadata
   const startIndex = (currentPage - 1) * ORDERS_PER_PAGE
   const endIndex = startIndex + ORDERS_PER_PAGE
-  const paginatedOrders = activeTabOrders.slice(startIndex, endIndex)
-  const totalPages = Math.ceil(activeTabOrders.length / ORDERS_PER_PAGE) || 1
 
   return (
     <div className="min-h-screen bg-[#07090e] text-white">
@@ -1198,7 +1281,7 @@ export default function ShiprocketDashboardPage() {
           <div className="border-b border-white/10 mb-6 flex overflow-x-auto scrollbar-none gap-2">
             {(['new', 'ready_to_ship', 'pickups_manifests', 'in_transit', 'delivered', 'rto', 'cancelled', 'all'] as const).map((tab) => {
               const isActive = currentTab === tab
-              const count = tab === 'pickups_manifests' ? manifests.length : (ordersTabLists[tab] || []).length
+              const count = tab === 'pickups_manifests' ? manifests.length : (serverTabCounts[tab] ?? 0)
               const tabLabels = {
                 new: 'New',
                 ready_to_ship: 'Ready To Ship',
@@ -1268,7 +1351,7 @@ export default function ShiprocketDashboardPage() {
                 {currentTab === 'new' && (
                   <button
                     onClick={() => {
-                      const firstSel = activeTabOrders.find((o) => selectedOrders[o.id])
+                      const firstSel = paginatedOrders.find((o) => selectedOrders[o.id])
                       if (firstSel) setActiveCourierOrder(firstSel)
                     }}
                     className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white transition-colors"
@@ -1280,7 +1363,7 @@ export default function ShiprocketDashboardPage() {
                   <button
                     onClick={() => {
                       // Trigger mock manifest on all selected
-                      activeTabOrders.forEach((o) => {
+                      paginatedOrders.forEach((o) => {
                         if (selectedOrders[o.id]) handleManifestDispatch(o)
                       })
                       setSelectedOrders({})
@@ -1311,13 +1394,22 @@ export default function ShiprocketDashboardPage() {
           )}
 
           {/* ── Render Tables according to shipping states ── */}
-          <div className="bg-card rounded-3xl border border-white/10 overflow-hidden shadow-2xl backdrop-blur-2xl">
+          <div className="bg-card rounded-3xl border border-white/10 overflow-hidden shadow-2xl backdrop-blur-2xl relative">
+            {/* Page transition overlay */}
+            {pageLoading && (
+              <div className="absolute inset-0 bg-[#07090e]/60 backdrop-blur-sm z-10 flex items-center justify-center rounded-3xl">
+                <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl px-5 py-3">
+                  <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
+                  <span className="text-sm text-white/70 font-medium">Loading page {currentPage}...</span>
+                </div>
+              </div>
+            )}
             {loading ? (
               <div className="py-24 text-center">
                 <Loader2 className="w-10 h-10 animate-spin text-purple-400 mx-auto mb-4" />
                 <p className="text-sm text-white/50 font-medium">Synchronizing with Shopify & Shiprocket API...</p>
               </div>
-            ) : activeTabOrders.length === 0 && currentTab !== 'pickups_manifests' ? (
+            ) : paginatedOrders.length === 0 && currentTab !== 'pickups_manifests' ? (
               <div className="py-20 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-white/30 mx-auto mb-4">
                   <Package className="w-8 h-8" />
@@ -1563,7 +1655,7 @@ export default function ShiprocketDashboardPage() {
                                     <span className="font-bold text-sm text-white">{customerName || 'Guest Checkout'}</span>
                                     <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                                       <span className="text-white/60 font-normal">
-                                        {isPhoneUnmasked ? order.customer?.phone || 'No phone' : 'xxxxxxxxxx'}
+                                        {isPhoneUnmasked ? order.customer?.phone || order.shipping_address?.phone || 'No phone' : 'xxxxxxxxxx'}
                                       </span>
                                       <button onClick={() => togglePhoneMask(order.id)} className="text-white/40 hover:text-white transition-colors">
                                         {isPhoneUnmasked ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
@@ -2080,7 +2172,7 @@ export default function ShiprocketDashboardPage() {
                                     <span className="font-bold text-sm text-white">{customerName || 'Guest Checkout'}</span>
                                     <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                                       <span className="text-white/60 font-normal">
-                                        {isPhoneUnmasked ? order.customer?.phone || 'No phone' : 'xxxxxxxxxx'}
+                                        {isPhoneUnmasked ? order.customer?.phone || order.shipping_address?.phone || 'No phone' : 'xxxxxxxxxx'}
                                       </span>
                                       <button onClick={() => togglePhoneMask(order.id)} className="text-white/40 hover:text-white transition-colors">
                                         {isPhoneUnmasked ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
@@ -2185,7 +2277,7 @@ export default function ShiprocketDashboardPage() {
               {totalPages > 1 && (
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-white/10 px-2 select-none">
                   <p className="text-xs text-white/50 font-normal">
-                    Showing <span className="font-bold text-white">{startIndex + 1}</span> to <span className="font-bold text-white">{Math.min(endIndex, activeTabOrders.length)}</span> of <span className="font-bold text-white">{activeTabOrders.length}</span> orders
+                    Showing <span className="font-bold text-white">{startIndex + 1}</span> to <span className="font-bold text-white">{Math.min(endIndex, totalOrders)}</span> of <span className="font-bold text-white">{totalOrders}</span> orders
                   </p>
                   
                   <div className="flex items-center gap-1.5">
@@ -2499,14 +2591,14 @@ export default function ShiprocketDashboardPage() {
 
       {/* ── GORGEOUS SLIDING ORDER DETAILS DRAWER ── */}
       {activeDetailOrder && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-fade-in" onClick={() => setActiveDetailOrder(null)}>
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-fade-in" onClick={() => { setActiveDetailOrder(null); setDrawerPhoneRevealed(false) }}>
           <div
             className="bg-[#0b0e14] border-l border-white/10 w-full max-w-xl h-full p-6 shadow-2xl relative flex flex-col animate-slide-left text-white overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
             <button
-              onClick={() => setActiveDetailOrder(null)}
+              onClick={() => { setActiveDetailOrder(null); setDrawerPhoneRevealed(false) }}
               className="absolute right-4 top-4 text-white/40 hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
@@ -2590,9 +2682,23 @@ export default function ShiprocketDashboardPage() {
                       {activeDetailOrder.customer?.email || 'N/A'}
                     </span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between items-center">
                     <span className="text-white/40 font-normal">Phone Coordinates</span>
-                    <span className="text-white font-mono">{activeDetailOrder.customer?.phone || 'N/A'}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-mono">
+                        {drawerPhoneRevealed
+                          ? (activeDetailOrder.customer?.phone || activeDetailOrder.shipping_address?.phone || 'N/A')
+                          : 'xxxxxxxxxx'
+                        }
+                      </span>
+                      <button
+                        onClick={() => setDrawerPhoneRevealed(v => !v)}
+                        className="text-white/30 hover:text-purple-400 transition-colors"
+                        title={drawerPhoneRevealed ? 'Hide phone' : 'Reveal phone'}
+                      >
+                        {drawerPhoneRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2615,7 +2721,22 @@ export default function ShiprocketDashboardPage() {
                     <p className="font-normal">
                       {activeDetailOrder.shipping_address?.city}, {activeDetailOrder.shipping_address?.province} - {activeDetailOrder.shipping_address?.zip}
                     </p>
-                    <p className="font-normal text-white/50 mt-1">Ph: {activeDetailOrder.shipping_address?.phone || 'N/A'}</p>
+                    <div className="flex items-center gap-1.5 font-normal text-white/50 mt-1">
+                      <span>Ph:</span>
+                      <span className="font-mono">
+                        {drawerPhoneRevealed
+                          ? (activeDetailOrder.shipping_address?.phone || activeDetailOrder.customer?.phone || 'N/A')
+                          : 'xxxxxxxxxx'
+                        }
+                      </span>
+                      <button
+                        onClick={() => setDrawerPhoneRevealed(v => !v)}
+                        className="text-white/30 hover:text-purple-400 transition-colors"
+                        title={drawerPhoneRevealed ? 'Hide phone' : 'Reveal phone'}
+                      >
+                        {drawerPhoneRevealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 

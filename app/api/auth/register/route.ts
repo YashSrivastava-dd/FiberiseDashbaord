@@ -43,6 +43,17 @@ export async function POST(req: NextRequest) {
     const db = admin.firestore(app)
     const usersCol = db.collection('users')
 
+    // Enforce strict limit of single Super Admin
+    if (role === 'super_admin') {
+      const superAdminQuery = await usersCol.where('role', '==', 'super_admin').limit(1).get()
+      if (!superAdminQuery.empty) {
+        return NextResponse.json(
+          { error: 'A Super Admin account already exists in the system. Only one Super Admin is allowed.' },
+          { status: 409 }
+        )
+      }
+    }
+
     // Check if user already exists
     const query = await usersCol.where('email', '==', email).limit(1).get()
     if (!query.empty) {

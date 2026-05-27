@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getAllShiprocketOrders, cancelShiprocketOrder } from '@/src/services/shiprocketClient'
+import { lookupPhone, lookupPhoneByChannel, storePhone, storePhoneByChannel } from '@/src/services/phoneStore'
 
 const SHOP_DOMAIN = process.env.NEXT_PUBLIC_SHOPIFY_SHOP_DOMAIN
 const API_VERSION = process.env.NEXT_PUBLIC_SHOPIFY_API_VERSION || '2024-01'
@@ -16,7 +17,11 @@ import {
   setActiveFetchPromise,
   getCachedOrderById,
   removeOrderFromCache,
-  cancelOrderInCache
+  cancelOrderInCache,
+  getCachedOrdersCount,
+  getCachedOrdersPaginated,
+  getCachedOrdersFiltered,
+  computeTabCounts
 } from '@/src/services/ordersCache'
 
 // Reusable helper to fetch all Shopify orders (handles pagination loop)
@@ -74,216 +79,321 @@ export async function GET(_req: NextRequest) {
       )
     }
 
-    const { searchParams } = new URL(_req.url)
+        const { searchParams } = new URL(_req.url)
     const forceRefresh = searchParams.get('refresh') === 'true'
-    const limitParam = searchParams.get('limit')
-    const limit = limitParam ? parseInt(limitParam) : null
+    const returnAll = searchParams.get('all') === 'true' // For analytics: return full list, no pagination
+    const pageParam = searchParams.get('page')
+    const perPageParam = searchParams.get('per_page')
+    const page = pageParam ? Math.max(1, parseInt(pageParam)) : 1
+    const perPage = perPageParam ? Math.max(1, Math.min(100, parseInt(perPageParam))) : 20
 
-    // A. Check in-memory cache for instant loads
+    // Parse all filtering query parameters
+    const tab = searchParams.get('tab') || 'all'
+    const search = searchParams.get('search') || undefined
+    const financial = searchParams.get('financial') || undefined
+    const paymentType = searchParams.get('payment') || undefined
+    const channel = searchParams.get('channel') || undefined
+    const courier = searchParams.get('courier') || undefined
+    const pickupLocation = searchParams.get('pickup') || undefined
+    const weightClass = searchParams.get('weight') || undefined
+    const rtoRisk = searchParams.get('rto') || undefined
+    const minPrice = searchParams.get('min_price') || undefined
+    const maxPrice = searchParams.get('max_price') || undefined
+    const datePreset = searchParams.get('date_preset') || undefined
+    const startDate = searchParams.get('start_date') || undefined
+    const endDate = searchParams.get('end_date') || undefined
+    const fulfillmentStatus = searchParams.get('fulfillment') || undefined
+
+    const filters = {
+      tab,
+      search,
+      financial,
+      paymentType,
+      channel,
+      courier,
+      pickupLocation,
+      weightClass,
+      rtoRisk,
+      minPrice,
+      maxPrice,
+      datePreset,
+      startDate,
+      endDate,
+      fulfillmentStatus
+    }
+
+    // A. Check in-memory cache for instant paginated response
     const now = Date.now()
     const cached = getCachedOrders()
     const expiresAt = getCacheExpiresAt()
-    if (!forceRefresh && cached && now < expiresAt) {
+    const cacheHasData = cached && cached.length > 0
+    const cacheIsFresh = cacheHasData && now < expiresAt
+
+    // Helper: build a paginated JSON response from current cache
+    function serveCachedResponse(isOffline = false) {
+      const total = getCachedOrdersCount(filters)
+      const tabCounts = computeTabCounts(filters)
+
+      if (returnAll) {
+        // Analytics mode: return ALL matching orders, no pagination
+        const allOrders = getCachedOrdersFiltered(filters)
+        return NextResponse.json(
+          {
+            orders: allOrders,
+            pagination: { page: 1, per_page: total, total, total_pages: 1 },
+            tabCounts,
+            isOffline,
+            syncing: false,
+          },
+          { status: 200 },
+        )
+      }
+
+      const totalPages = Math.ceil(total / perPage) || 1
+      const paginatedSlice = getCachedOrdersPaginated(page, perPage, filters)
+
       return NextResponse.json(
-        { orders: limit ? cached.slice(0, limit) : cached },
+        {
+          orders: paginatedSlice,
+          pagination: { page, per_page: perPage, total, total_pages: totalPages },
+          tabCounts,
+          isOffline,
+          syncing: false,
+        },
         { status: 200 },
       )
     }
 
-    // B. Fetch Shopify and Shiprocket concurrently in parallel with deduplication!
-    let promise
-    if (limit) {
-      // Direct fast fetch for limited list
-      promise = Promise.all([
-        fetchAllShopifyOrders(limit),
+    // Helper: kick off background sync (fire-and-forget, never blocks response)
+    function triggerBackgroundSync() {
+      if (getActiveFetchPromise()) return // Already syncing
+
+      const syncPromise = Promise.all([
+        fetchAllShopifyOrders(),
         getAllShiprocketOrders()
-      ]).then(([shopify, shiprocket]) => {
-        return { shopifyOrders: shopify, shiprocketOrders: shiprocket, isOffline: false }
-      }).catch((err) => {
-        console.warn('Limited API sync failed, falling back to cache or mock data:', err.message || err)
-        return { shopifyOrders: [], shiprocketOrders: [], isOffline: true }
-      })
-    } else {
-      promise = getActiveFetchPromise()
-      if (!promise) {
-        promise = Promise.all([
-          fetchAllShopifyOrders(),
-          getAllShiprocketOrders()
-        ]).then(([shopify, shiprocket]) => {
-          setActiveFetchPromise(null) // Reset when completed
-          return { shopifyOrders: shopify, shiprocketOrders: shiprocket, isOffline: false }
-        }).catch((err) => {
-          setActiveFetchPromise(null) // Reset on error so future requests can retry
-          console.warn('API sync failed, falling back to cache or mock data:', err.message || err)
-          return { shopifyOrders: [], shiprocketOrders: [], isOffline: true }
+      ]).then(([shopifyOrders, shiprocketOrders]) => {
+        setActiveFetchPromise(null)
+
+        // Map Shopify orders for rapid deduplication lookup
+        const shopifyMap = new Map<string, any>()
+        shopifyOrders.forEach((order) => {
+          if (order.name) {
+            const cleanName = order.name.replace(/^#/, '').trim().toLowerCase()
+            shopifyMap.set(cleanName, order)
+          }
+          if (order.id) {
+            shopifyMap.set(String(order.id), order)
+          }
         })
-        setActiveFetchPromise(promise)
-      }
-    }
 
-    const result = await promise
-    let combinedOrders: any[] = []
-    let isOffline = result.isOffline
+        // Match Shiprocket orders to enrich matched Shopify orders and extract custom ones
+        const customOrders: any[] = []
 
-    if (isOffline) {
-      // Fallback to cache first (even if expired, to persist session state)
-      const cached = getCachedOrders()
-      if (cached && cached.length > 0) {
-        combinedOrders = limit ? cached.slice(0, limit) : cached
-      } else {
-        // Generate high-fidelity mock orders
-        const { generateMockOrders } = require('@/src/services/mockDataGenerator')
-        combinedOrders = generateMockOrders()
-        setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
-        if (limit) {
-          combinedOrders = combinedOrders.slice(0, limit)
-        }
-      }
-    } else {
-      const { shopifyOrders, shiprocketOrders } = result
+        shiprocketOrders.forEach((srOrder) => {
+          const cleanSrName = String(srOrder.channel_order_id || '').replace(/^#/, '').trim().toLowerCase()
+          const matchedShopify = shopifyMap.get(cleanSrName)
 
-      // C. Map Shopify orders for rapid deduplication lookup
-      const shopifyMap = new Map<string, any>()
-      shopifyOrders.forEach((order) => {
-        if (order.name) {
-          const cleanName = order.name.replace(/^#/, '').trim().toLowerCase()
-          shopifyMap.set(cleanName, order)
-        }
-        if (order.id) {
-          shopifyMap.set(String(order.id), order)
-        }
-      })
+          const latestShipment = srOrder.shipments?.[0]
+          const tracking_number = latestShipment?.awb || srOrder.last_mile_awb || null
+          const tracking_company = latestShipment?.courier || srOrder.last_mile_courier_name || null
+          const tracking_url = srOrder.last_mile_awb_track_url || null
 
-      // D. Match Shiprocket orders to enrich matched Shopify orders and extract custom ones
-      const customOrders: any[] = []
+          const srStatus = (srOrder.status || '').toLowerCase()
+          let shipment_status = null
+          if (srStatus.includes('rto') || srStatus.includes('returned')) {
+            shipment_status = 'rto'
+          } else if (srStatus.includes('undelivered') || srStatus.includes('fail') || srStatus.includes('error')) {
+            shipment_status = 'failure'
+          } else if (srStatus.includes('delivered')) {
+            shipment_status = 'delivered'
+          } else if (srStatus.includes('transit') || srStatus.includes('out for delivery')) {
+            shipment_status = 'in_transit'
+          } else if (srStatus.includes('pickup') || srStatus.includes('scheduled')) {
+            shipment_status = 'pickup_scheduled'
+          }
 
-      shiprocketOrders.forEach((srOrder) => {
-        const cleanSrName = String(srOrder.channel_order_id || '').replace(/^#/, '').trim().toLowerCase()
-        const matchedShopify = shopifyMap.get(cleanSrName)
+          if (matchedShopify) {
+            if (tracking_number) {
+              const enrichmentFulfillment = {
+                id: latestShipment?.id || Math.floor(Math.random() * 10000),
+                status: 'success',
+                tracking_number,
+                tracking_company,
+                tracking_url,
+                shipment_status,
+                created_at: srOrder.updated_at || srOrder.created_at || matchedShopify.created_at,
+              }
+              matchedShopify.fulfillment_status = 'fulfilled'
+              matchedShopify.fulfillments = [enrichmentFulfillment]
+            }
+          } else {
+            const isCod = (srOrder.payment_method || '').toLowerCase() === 'cod'
+            const isSrCancelled = srStatus.includes('cancelled') || srStatus.includes('canceled')
+            const financial_status = isSrCancelled ? 'voided' : (isCod ? 'pending' : 'paid')
+            const cancelled_at = isSrCancelled ? (srOrder.updated_at || srOrder.created_at || new Date().toISOString()) : null
 
-        const latestShipment = srOrder.shipments?.[0]
-        const tracking_number = latestShipment?.awb || srOrder.last_mile_awb || null
-        const tracking_company = latestShipment?.courier || srOrder.last_mile_courier_name || null
-        const tracking_url = srOrder.last_mile_awb_track_url || null
-
-        const srStatus = (srOrder.status || '').toLowerCase()
-        let shipment_status = null
-        if (srStatus.includes('rto') || srStatus.includes('returned')) {
-          shipment_status = 'rto'
-        } else if (srStatus.includes('undelivered') || srStatus.includes('fail') || srStatus.includes('error')) {
-          shipment_status = 'failure'
-        } else if (srStatus.includes('delivered')) {
-          shipment_status = 'delivered'
-        } else if (srStatus.includes('transit') || srStatus.includes('out for delivery')) {
-          shipment_status = 'in_transit'
-        } else if (srStatus.includes('pickup') || srStatus.includes('scheduled')) {
-          shipment_status = 'pickup_scheduled'
-        }
-
-        if (matchedShopify) {
-          // Enforce matched Shopify order enrichment with Shiprocket tracking info
-          if (tracking_number) {
-            const enrichmentFulfillment = {
+            const enrichFulfillment = tracking_number ? [{
               id: latestShipment?.id || Math.floor(Math.random() * 10000),
               status: 'success',
               tracking_number,
               tracking_company,
               tracking_url,
-              shipment_status,
-              created_at: srOrder.updated_at || srOrder.created_at || matchedShopify.created_at,
+              shipment_status: isSrCancelled ? 'cancelled' : shipment_status,
+              created_at: srOrder.updated_at || srOrder.created_at,
+            }] : []
+
+            // Shiprocket masks customer_phone as "xxxxxxxxxx" in list API.
+            // The real unmasked phone is in customer_phone_unmasked.
+            let srPhone = (
+              srOrder.customer_phone_unmasked ||
+              srOrder.billing_phone ||
+              srOrder.phone ||
+              srOrder.billing_customer_phone ||
+              srOrder.shipping_phone ||
+              (typeof srOrder.billing_address === 'object' ? srOrder.billing_address?.phone : '') ||
+              ''
+            )
+            // Treat masked placeholder as empty
+            if (srPhone === 'xxxxxxxxxx') srPhone = ''
+
+            if (!srPhone) {
+              // Fall back to in-memory cache phone (from addOrderToCache on creation)
+              const existingCached = require('@/src/services/ordersCache').cachedOrders
+              if (Array.isArray(existingCached)) {
+                const match = existingCached.find((o: any) => String(o.id) === String(srOrder.id))
+                if (match) {
+                  srPhone = match.customer?.phone || match.shipping_address?.phone || ''
+                }
+              }
             }
-            matchedShopify.fulfillment_status = 'fulfilled'
-            matchedShopify.fulfillments = [enrichmentFulfillment]
+
+            if (!srPhone) {
+              // Final fallback: persistent phone store (survives restarts, works for pre-fix cloned orders)
+              const channelId = String(srOrder.channel_order_id || '').replace(/^#/, '').trim()
+              srPhone = lookupPhone(srOrder.id) || lookupPhoneByChannel(channelId)
+
+              // For cloned orders (channel_order_id ends with -C), recover phone from the parent Shopify order
+              if (!srPhone && channelId.toLowerCase().endsWith('-c')) {
+                const parentId = channelId.slice(0, -2).toLowerCase() // strip the "-C" suffix
+                const parentOrder = shopifyMap.get(parentId)
+                if (parentOrder) {
+                  srPhone = parentOrder.shipping_address?.phone || parentOrder.customer?.phone || ''
+                  if (srPhone) {
+                    // Persist it so we don't have to look it up again
+                    storePhone(srOrder.id, srPhone)
+                    storePhoneByChannel(channelId, srPhone)
+                  }
+                }
+              }
+            }
+
+            const formattedCustomOrder = {
+              id: srOrder.id,
+              name: srOrder.channel_order_id ? (srOrder.channel_order_id.startsWith('#') ? srOrder.channel_order_id : '#' + srOrder.channel_order_id) : `#SR-${srOrder.id}`,
+              created_at: srOrder.created_at || srOrder.channel_created_at || new Date().toISOString(),
+              financial_status,
+              cancelled_at,
+              fulfillment_status: tracking_number ? 'fulfilled' : null,
+              total_price: String(srOrder.total || '0'),
+              currency: 'INR',
+              customer: {
+                first_name: srOrder.customer_name || srOrder.billing_customer_name || 'Manual Customer',
+                last_name: srOrder.billing_last_name || '',
+                email: srOrder.customer_email || srOrder.billing_email || '',
+                phone: srPhone,
+              },
+              shipping_address: {
+                first_name: srOrder.customer_name || srOrder.billing_customer_name || 'Manual Customer',
+                last_name: srOrder.billing_last_name || '',
+                address1: srOrder.customer_address || srOrder.billing_address || '',
+                address2: srOrder.customer_address_2 || srOrder.billing_address_2 || '',
+                city: srOrder.customer_city || srOrder.billing_city || '',
+                province: srOrder.customer_state || srOrder.billing_state || '',
+                country: srOrder.customer_country || srOrder.billing_country || 'India',
+                zip: srOrder.customer_pincode || srOrder.billing_pincode || '',
+                phone: srPhone,
+              },
+              line_items: (srOrder.products || []).map((p: any) => ({
+                id: p.id || Math.floor(Math.random() * 100000),
+                title: p.name || 'Custom Product',
+                variant_title: null,
+                sku: p.channel_sku || p.sku || '',
+                quantity: p.quantity || 1,
+                price: String(p.price || '0'),
+                total_discount: String(p.discount || '0'),
+                fulfillment_status: null,
+              })),
+              fulfillments: enrichFulfillment,
+              source: 'shiprocket',
+            }
+
+            customOrders.push(formattedCustomOrder)
           }
-        } else if (!limit) {
-          // Construct a manual/custom order record matching the ShopifyOrder interface
-          const isCod = (srOrder.payment_method || '').toLowerCase() === 'cod'
-          const isSrCancelled = srStatus.includes('cancelled') || srStatus.includes('canceled')
-          const financial_status = isSrCancelled ? 'voided' : (isCod ? 'pending' : 'paid')
-          const cancelled_at = isSrCancelled ? (srOrder.updated_at || srOrder.created_at || new Date().toISOString()) : null
+        })
 
-          const enrichFulfillment = tracking_number ? [{
-            id: latestShipment?.id || Math.floor(Math.random() * 10000),
-            status: 'success',
-            tracking_number,
-            tracking_company,
-            tracking_url,
-            shipment_status: isSrCancelled ? 'cancelled' : shipment_status,
-            created_at: srOrder.updated_at || srOrder.created_at,
-          }] : []
+        const combinedOrders = shopifyOrders.concat(customOrders)
 
-          const formattedCustomOrder = {
-            id: srOrder.id,
-            name: srOrder.channel_order_id ? (srOrder.channel_order_id.startsWith('#') ? srOrder.channel_order_id : '#' + srOrder.channel_order_id) : `#SR-${srOrder.id}`,
-            created_at: srOrder.created_at || srOrder.channel_created_at || new Date().toISOString(),
-            financial_status,
-            cancelled_at,
-            fulfillment_status: tracking_number ? 'fulfilled' : null,
-            total_price: String(srOrder.total || '0'),
-            currency: 'INR',
-            customer: {
-              first_name: srOrder.customer_name || 'Manual Customer',
-              last_name: '',
-              email: srOrder.customer_email || '',
-              phone: srOrder.customer_phone || '',
-            },
-            shipping_address: {
-              first_name: srOrder.customer_name || 'Manual Customer',
-              last_name: '',
-              address1: srOrder.customer_address || '',
-              address2: srOrder.customer_address_2 || '',
-              city: srOrder.customer_city || '',
-              province: srOrder.customer_state || '',
-              country: srOrder.customer_country || 'India',
-              zip: srOrder.customer_pincode || '',
-              phone: srOrder.customer_phone || '',
-            },
-            line_items: (srOrder.products || []).map((p: any) => ({
-              id: p.id || Math.floor(Math.random() * 100000),
-              title: p.name || 'Custom Product',
-              variant_title: null,
-              sku: p.channel_sku || p.sku || '',
-              quantity: p.quantity || 1,
-              price: String(p.price || '0'),
-              total_discount: String(p.discount || '0'),
-              fulfillment_status: null,
-            })),
-            fulfillments: enrichFulfillment,
-            source: 'shiprocket',
+        // Preserve any orders that were manually injected into cache (e.g. freshly cloned orders)
+        // that Shiprocket hasn't propagated yet in its listing API
+        const existingCache = require('@/src/services/ordersCache').cachedOrders
+        if (Array.isArray(existingCache) && existingCache.length > 0) {
+          const combinedIds = new Set(combinedOrders.map((o: any) => String(o.id)))
+          const orphaned = existingCache.filter((o: any) => !combinedIds.has(String(o.id)))
+          if (orphaned.length > 0) {
+            console.log(`ℹ️ Preserving ${orphaned.length} injected order(s) not yet in Shiprocket sync`)
+            combinedOrders.push(...orphaned)
           }
-
-          customOrders.push(formattedCustomOrder)
         }
-      })
 
-      combinedOrders = shopifyOrders.concat(customOrders)
-
-      // Save results into memory cache only for full sync
-      if (!limit) {
         setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
-      }
+
+        // Proactively scan for RTO email alerts
+        try {
+          const { shootRtoEmailAlert } = require('@/src/services/emailService')
+          combinedOrders.forEach((order) => {
+            const isRto = order.fulfillment_status === 'fulfilled' && 
+                          ['failure', 'rto', 'returned'].includes((order.fulfillments?.[0]?.shipment_status || '').toLowerCase())
+            if (isRto) {
+              shootRtoEmailAlert(order).catch((err: any) => 
+                console.error(`⚠️ Failed to shoot RTO alert email for order ${order.name || order.id}:`, err)
+              )
+            }
+          })
+        } catch (e) {
+          console.error('⚠️ Failed to load RTO email alert engine:', e)
+        }
+
+        console.log(`✅ Background sync complete: ${combinedOrders.length} orders cached`)
+      }).catch((err) => {
+        setActiveFetchPromise(null)
+        console.warn('Background sync failed:', err.message || err)
+      })
+
+      setActiveFetchPromise(syncPromise)
     }
 
-    // Proactively scan for any order that has transitioned to RTO and trigger email notifications!
-    try {
-      const { shootRtoEmailAlert } = require('@/src/services/emailService')
-      combinedOrders.forEach((order) => {
-        const isRto = order.fulfillment_status === 'fulfilled' && 
-                      ['failure', 'rto', 'returned'].includes((order.fulfillments?.[0]?.shipment_status || '').toLowerCase())
-        if (isRto) {
-          shootRtoEmailAlert(order).catch((err: any) => 
-            console.error(`⚠️ Failed to shoot RTO alert email for order ${order.name || order.id}:`, err)
-          )
-        }
-      })
-    } catch (e) {
-      console.error('⚠️ Failed to load RTO email alert engine:', e)
+    // ─── FAST PATH A: Cache is fresh → serve instantly ───
+    if (!forceRefresh && cacheIsFresh) {
+      return serveCachedResponse()
     }
+
+    // ─── FAST PATH B: Cache exists but is stale → serve stale immediately + refresh in background ───
+    if (!forceRefresh && cacheHasData) {
+      triggerBackgroundSync() // Fire-and-forget, does NOT block
+      return serveCachedResponse() // Serve stale data instantly
+    }
+
+    // ─── PATH C: Cache is completely empty (cold start / first boot) ───
+    // Kick off background sync and return a "syncing" response so the frontend can retry in 2s
+    triggerBackgroundSync()
 
     return NextResponse.json(
       {
-        orders: combinedOrders,
-        isOffline,
+        orders: [],
+        pagination: { page, per_page: perPage, total: 0, total_pages: 0 },
+        tabCounts: { new: 0, ready_to_ship: 0, pickups_manifests: 0, in_transit: 0, delivered: 0, rto: 0, cancelled: 0, all: 0 },
+        isOffline: false,
+        syncing: true,
       },
       { status: 200 },
     )

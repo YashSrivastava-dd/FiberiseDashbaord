@@ -28,7 +28,15 @@ export function TopBar() {
   useEffect(() => {
     const cached = localStorage.getItem('fiberise_notifications')
     if (cached) {
-      setNotifications(JSON.parse(cached))
+      const parsed: AppNotification[] = JSON.parse(cached)
+      setNotifications(parsed)
+      // Seed baseline from already-seen order notifications so they won't be re-detected
+      parsed.forEach((n) => {
+        if (n.type === 'order') {
+          const id = parseInt(n.id.replace('notif-', ''), 10)
+          if (!isNaN(id)) baselineIdsRef.current.add(id)
+        }
+      })
     } else {
       const defaults: AppNotification[] = [
         {
@@ -105,6 +113,8 @@ export function TopBar() {
             }
 
             setNotifications((prev) => {
+              // Deduplicate — skip if this notification ID already exists
+              if (prev.some((n) => n.id === newNotif.id)) return prev
               const updated = [newNotif, ...prev]
               localStorage.setItem('fiberise_notifications', JSON.stringify(updated))
               return updated

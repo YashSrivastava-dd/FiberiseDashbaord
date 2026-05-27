@@ -14,6 +14,7 @@ const SECRET = crypto
 export interface SessionData {
   email: string
   role: string
+  sessionId?: string
   expiresAt: number
 }
 
@@ -59,34 +60,68 @@ export function decryptSession(token: string): SessionData | null {
 }
 
 /**
- * Self-seeding helper to ensure the default admin user exists in Firestore
+ * Helper to validate session cookie dynamically against Firestore activeSessionId
+ */
+export async function validateSession(session: SessionData): Promise<boolean> {
+  try {
+    if (!session || !session.email || !session.sessionId) return false
+
+    const app = getFirebaseAdmin()
+    const db = admin.firestore(app)
+    const query = await db.collection('users')
+      .where('email', '==', session.email.toLowerCase().trim())
+      .limit(1)
+      .get()
+
+    if (query.empty) return false
+
+    const userData = query.docs[0].data()
+    return userData.activeSessionId === session.sessionId
+  } catch (error) {
+    console.error('Session validation error:', error)
+    return false
+  }
+}
+
+/**
+ * Self-seeding helper to ensure all role levels exist in Firestore
  */
 export async function seedAdminUser(): Promise<void> {
   try {
     const app = getFirebaseAdmin()
     const db = admin.firestore(app)
     const usersCol = db.collection('users')
-    
-    const adminEmail = 'admin@fiberisefit.com'
-    const query = await usersCol.where('email', '==', adminEmail).limit(1).get()
-    
-    if (query.empty) {
-      console.log(`🌱 Seeding default admin user: ${adminEmail}`)
-      
-      const salt = crypto.randomBytes(16).toString('hex')
-      const passwordHash = hashPassword('admin@1234', salt)
-      
-      await usersCol.add({
-        email: adminEmail,
-        salt,
-        passwordHash,
-        role: 'admin',
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      })
-      
-      console.log('✅ Default admin user seeded successfully')
+
+    // Helper to seed a single user safely
+    const seedUserIfMissing = async (email: string, password: string, role: string) => {
+      const query = await usersCol.where('email', '==', email.toLowerCase().trim()).limit(1).get()
+      if (query.empty) {
+        console.log(`🌱 Seeding default ${role} user: ${email}`)
+        const salt = crypto.randomBytes(16).toString('hex')
+        const passwordHash = hashPassword(password, salt)
+        
+        await usersCol.add({
+          email: email.toLowerCase().trim(),
+          salt,
+          passwordHash,
+          role,
+          activeSessionId: '', // initial blank session ID
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        })
+        console.log(`✅ Default ${role} user seeded successfully`)
+      }
     }
+
+    // Seed Super Admin
+    await seedUserIfMissing('superadmin@fiberisefit.com', 'superadmin@1234', 'super_admin')
+
+    // Seed Standard Admin
+    await seedUserIfMissing('admin@fiberisefit.com', 'admin@1234', 'admin')
+
+    // Seed Employee
+    await seedUserIfMissing('employee@fiberisefit.com', 'employee@1234', 'employee')
+
   } catch (error) {
-    console.error('❌ Failed to seed default admin user:', error)
+    console.error('❌ Failed to seed default users:', error)
   }
 }

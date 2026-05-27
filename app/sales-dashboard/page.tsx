@@ -91,7 +91,10 @@ export default function SalesDashboardPage() {
   const fetchOrders = async (forceRefresh: boolean = false) => {
     try {
       setLoading(true)
-      const url = forceRefresh ? '/api/shopify/orders?refresh=true' : '/api/shopify/orders'
+      // Use ?all=true to get the complete order list from cache (not just page 1 of 20)
+      const url = forceRefresh
+        ? '/api/shopify/orders?all=true&refresh=true'
+        : '/api/shopify/orders?all=true'
       const res = await fetch(url)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to fetch sales database')

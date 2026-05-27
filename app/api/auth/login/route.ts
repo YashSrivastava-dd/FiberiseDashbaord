@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import crypto from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import admin from 'firebase-admin'
 import { getFirebaseAdmin } from '@/src/firebase/firebase.config'
@@ -46,11 +47,21 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Generate a unique session identifier to prevent concurrent logins
+    const sessionId = crypto.randomUUID()
+
+    // Update activeSessionId on user document
+    await userDoc.ref.update({
+      activeSessionId: sessionId,
+      lastLoginAt: admin.firestore.FieldValue.serverTimestamp()
+    })
+
     // 4. Session payload
     const expiresAt = Date.now() + 24 * 60 * 60 * 1000 // 24 hours
     const tokenPayload = {
       email: userData.email,
       role: userData.role || 'user',
+      sessionId,
       expiresAt,
     }
 
