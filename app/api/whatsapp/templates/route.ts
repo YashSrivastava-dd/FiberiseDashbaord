@@ -64,13 +64,16 @@ export async function POST(req: NextRequest) {
 
     // Trace action
     const { userId, email } = getSessionInfo(req);
-    await logAction(
+    logAction({
       userId,
-      email,
-      'CREATE_TEMPLATE',
-      { id, templateName, dayNumber: Number(dayNumber), campaignName },
-      req
-    );
+      userEmail: email,
+      actionType: 'CREATE_TEMPLATE',
+      description: `Created WhatsApp template "${templateName}" (Day ${dayNumber})`,
+      module: 'whatsapp',
+      status: 'success',
+      details: { id, templateName, dayNumber: Number(dayNumber), campaignName },
+      req,
+    });
 
     return NextResponse.json(
       { success: true, id, templateName, dayNumber },
@@ -106,13 +109,17 @@ export async function PATCH(req: NextRequest) {
 
     // Trace action
     const { userId, email } = getSessionInfo(req);
-    await logAction(
+    logAction({
       userId,
-      email,
-      'UPDATE_TEMPLATE',
-      { templateId, updates },
-      req
-    );
+      userEmail: email,
+      actionType: 'UPDATE_TEMPLATE',
+      description: `Updated WhatsApp template ${templateId}`,
+      module: 'whatsapp',
+      status: 'success',
+      changes: { after: updates },
+      details: { templateId, updates },
+      req,
+    });
 
     return NextResponse.json(
       { success: true, templateId },
@@ -143,13 +150,16 @@ export async function DELETE(req: NextRequest) {
 
     // Trace action
     const { userId, email } = getSessionInfo(req);
-    await logAction(
+    logAction({
       userId,
-      email,
-      'DELETE_TEMPLATE',
-      { templateId },
-      req
-    );
+      userEmail: email,
+      actionType: 'DELETE_TEMPLATE',
+      description: `Deleted WhatsApp template ${templateId}`,
+      module: 'whatsapp',
+      status: 'success',
+      details: { templateId },
+      req,
+    });
 
     return NextResponse.json(
       { success: true, deleted: templateId },

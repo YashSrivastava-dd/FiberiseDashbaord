@@ -13,13 +13,20 @@ export async function POST(_req: NextRequest) {
     }
 
     if (session) {
-      await logAction(
-        session.email,
-        session.email,
-        'USER_LOGOUT',
-        { role: session.role || 'user' },
-        _req
-      )
+      // Fire-and-forget audit log
+      logAction({
+        userId: session.email,
+        userEmail: session.email,
+        userName: session.email?.split('@')[0] || '',
+        userRole: session.role || 'user',
+        sessionId: session.sessionId || '',
+        actionType: 'USER_LOGOUT',
+        description: `${session.email} logged out`,
+        module: 'auth',
+        status: 'success',
+        details: { role: session.role || 'user' },
+        req: _req,
+      })
     }
 
     const res = NextResponse.json({ success: true }, { status: 200 })

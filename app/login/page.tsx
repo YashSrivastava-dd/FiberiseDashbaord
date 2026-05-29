@@ -22,6 +22,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [rememberMe, setRememberMe] = useState(false)
 
   // Detect concurrent kickout parameter on client-side mount safely
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, rememberMe }),
       })
 
       const data = await res.json().catch(() => ({}))
@@ -58,12 +59,12 @@ export default function LoginPage() {
       }
 
       setSuccess('Access verified. Redirecting to dashboard...')
-      
+
       // Short delay for high-fidelity success animation transition
       setTimeout(() => {
         router.push('/orders')
         router.refresh()
-      }, 1000)
+      }, 50)
     } catch (err: any) {
       setError(err.message || 'Failed to connect to authentication server.')
     } finally {
@@ -73,13 +74,13 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen w-full bg-[#07090e] text-white flex items-center justify-center p-4 relative overflow-hidden select-none">
-      
+
       {/* Premium background glowing orb accents */}
       <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] rounded-full bg-purple-600/10 blur-[120px] pointer-events-none"></div>
       <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-pink-600/5 blur-[120px] pointer-events-none"></div>
 
       <div className="w-full max-w-md z-10">
-        
+
         {/* Top Header Panel */}
         <div className="text-center mb-8 animate-fade-in">
           <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-purple-500/10 border border-purple-500/20 mb-3 shadow-lg shadow-purple-500/5 relative animate-pulse">
@@ -96,7 +97,7 @@ export default function LoginPage() {
 
         {/* Glassmorphic Login Card */}
         <div className="bg-[#0e121a]/80 border border-white/10 rounded-3xl p-6 lg:p-8 backdrop-blur-xl shadow-2xl animate-scale-up">
-          
+
           {/* Reactive Error Alert banner */}
           {error && (
             <div className="mb-5 p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-xs font-semibold flex items-start gap-2.5 animate-slide-down">
@@ -114,7 +115,7 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            
+
             {/* Email field */}
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] text-white/40 font-bold uppercase tracking-wider ml-1">
@@ -159,6 +160,22 @@ export default function LoginPage() {
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+            </div>
+
+            {/* Remember Me checkbox */}
+            <div className="flex items-center justify-between py-1 select-none">
+              <label className="flex items-center gap-2.5 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="rounded border-white/10 bg-white/5 w-4 h-4 transition-all cursor-pointer accent-purple-600 focus:ring-0 focus:ring-offset-0 focus:outline-none"
+                  disabled={loading}
+                />
+                <span className="text-xs text-white/50 group-hover:text-white/80 transition-colors font-medium">
+                  Remember me
+                </span>
+              </label>
             </div>
 
             {/* Submit button */}

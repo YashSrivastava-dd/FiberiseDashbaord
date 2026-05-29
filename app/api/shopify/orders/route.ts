@@ -415,6 +415,23 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'No order IDs supplied' }, { status: 400 })
     }
 
+    // Extract session for audit attribution
+    let auditEmail = 'unknown'
+    let auditRole = 'unknown'
+    let auditSessionId = ''
+    try {
+      const { decryptSession } = require('@/src/services/auth')
+      const sessionCookie = req.cookies.get('fiberise_session')?.value
+      if (sessionCookie) {
+        const session = decryptSession(sessionCookie)
+        if (session) {
+          auditEmail = session.email || 'unknown'
+          auditRole = session.role || 'unknown'
+          auditSessionId = session.sessionId || ''
+        }
+      }
+    } catch {}
+
     const results = await Promise.allSettled(
       ids.map(async (id) => {
         const cachedOrder = getCachedOrderById(id)
@@ -461,6 +478,28 @@ export async function DELETE(req: NextRequest) {
       if (r.status === 'fulfilled') return r.value
       return { id: ids[index], success: false, error: r.reason?.message || 'Unknown error' }
     })
+
+    // Fire-and-forget audit log for order cancellation(s)
+    try {
+      const { logAction } = require('@/src/services/auditLogService')
+      const actionType = ids.length > 1 ? 'BULK_ORDER_CANCEL' : 'ORDER_CANCEL'
+      const orderNames = ids.map((id: any) => {
+        const cached = getCachedOrderById(id)
+        return cached?.name || `#${id}`
+      })
+      logAction({
+        userId: auditEmail,
+        userEmail: auditEmail,
+        userRole: auditRole,
+        sessionId: auditSessionId,
+        actionType,
+        description: `Cancelled ${ids.length} order(s): ${orderNames.join(', ')}`,
+        module: 'orders',
+        status: 'success',
+        details: { orderIds: ids, results: summary },
+        req,
+      })
+    } catch {}
 
     return NextResponse.json({ success: true, results: summary }, { status: 200 })
   } catch (error: any) {

@@ -1,65 +1,284 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sidebar } from '@/components/layout/Sidebar'
-import { 
-  ShieldCheck, 
-  Search, 
-  RefreshCw, 
-  Terminal, 
-  Eye, 
-  X, 
-  Clock, 
-  User, 
-  Globe, 
+import {
+  ShieldCheck,
+  Search,
+  RefreshCw,
+  Terminal,
+  Eye,
+  X,
+  Clock,
+  User,
+  Globe,
   Smartphone,
   Copy,
-  Check
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
+  AlertTriangle,
+  LogIn,
+  LogOut,
+  Package,
+  MessageSquare,
+  Settings,
+  Shield,
+  Monitor,
+  Activity,
+  Filter,
+  LayoutList,
+  Table2,
+  XCircle,
+  CheckCircle,
+  Calendar,
+  Loader2,
 } from 'lucide-react'
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface AuditLog {
   id: string
   userId: string
   userEmail: string
+  userName: string
+  userRole: string
+  sessionId: string
   actionType: string
+  description: string
+  module: string
+  status: 'success' | 'failure'
+  method: string
+  path: string
+  ipAddress: string
+  userAgent: string
+  device: string
+  os: string
+  browser: string
+  changes?: { before?: any; after?: any }
   details: any
   timestamp: string
-  ipAddress?: string
-  userAgent?: string
 }
 
+interface PaginationInfo {
+  page: number
+  per_page: number
+  total: number
+  total_pages: number
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const LOGS_PER_PAGE = 25
+
+const ACTION_CATEGORIES = [
+  { value: 'ALL', label: 'All Events' },
+  { value: 'AUTH', label: 'Authentication' },
+  { value: 'ORDERS', label: 'Orders' },
+  { value: 'WHATSAPP', label: 'WhatsApp' },
+  { value: 'SYSTEM', label: 'System' },
+]
+
+const MODULE_OPTIONS = [
+  { value: 'all', label: 'All Modules' },
+  { value: 'auth', label: 'Auth' },
+  { value: 'orders', label: 'Orders' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'crm', label: 'CRM' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'system', label: 'System' },
+]
+
+const STATUS_OPTIONS = [
+  { value: 'all', label: 'All Statuses' },
+  { value: 'success', label: 'Success' },
+  { value: 'failure', label: 'Failure' },
+]
+
+// ─── Helper Functions ────────────────────────────────────────────────────────
+
+function getActionIcon(actionType: string) {
+  if (actionType.includes('LOGIN') || actionType === 'USER_LOGIN') return <LogIn className="w-4 h-4" />
+  if (actionType === 'USER_LOGOUT') return <LogOut className="w-4 h-4" />
+  if (actionType.includes('ORDER')) return <Package className="w-4 h-4" />
+  if (actionType.includes('TEMPLATE') || actionType.includes('JOURNEY')) return <MessageSquare className="w-4 h-4" />
+  if (actionType.includes('ADMIN') || actionType.includes('ROLE')) return <Shield className="w-4 h-4" />
+  return <Settings className="w-4 h-4" />
+}
+
+function getActionColor(actionType: string, status: string) {
+  if (status === 'failure') return { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-500/30', dot: 'bg-red-500' }
+  switch (actionType) {
+    case 'USER_LOGIN':
+      return { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/30', dot: 'bg-emerald-500' }
+    case 'USER_LOGOUT':
+      return { bg: 'bg-cyan-500/10', text: 'text-cyan-400', border: 'border-cyan-500/30', dot: 'bg-cyan-500' }
+    case 'LOGIN_FAILED':
+      return { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-500/30', dot: 'bg-red-500' }
+    case 'ORDER_CREATE':
+    case 'ORDER_CLONE':
+      return { bg: 'bg-purple-500/10', text: 'text-purple-400', border: 'border-purple-500/30', dot: 'bg-purple-500' }
+    case 'ORDER_CANCEL':
+    case 'BULK_ORDER_CANCEL':
+      return { bg: 'bg-rose-500/10', text: 'text-rose-400', border: 'border-rose-500/30', dot: 'bg-rose-500' }
+    case 'CREATE_TEMPLATE':
+      return { bg: 'bg-violet-500/10', text: 'text-violet-400', border: 'border-violet-500/30', dot: 'bg-violet-500' }
+    case 'UPDATE_TEMPLATE':
+      return { bg: 'bg-indigo-500/10', text: 'text-indigo-400', border: 'border-indigo-500/30', dot: 'bg-indigo-500' }
+    case 'DELETE_TEMPLATE':
+      return { bg: 'bg-rose-500/10', text: 'text-rose-400', border: 'border-rose-500/30', dot: 'bg-rose-500' }
+    case 'UPDATE_JOURNEY_STATUS':
+      return { bg: 'bg-amber-500/10', text: 'text-amber-400', border: 'border-amber-500/30', dot: 'bg-amber-500' }
+    default:
+      return { bg: 'bg-slate-500/10', text: 'text-slate-400', border: 'border-slate-500/30', dot: 'bg-slate-500' }
+  }
+}
+
+function getModuleBadge(module: string) {
+  const map: Record<string, { icon: React.ReactNode; color: string }> = {
+    auth: { icon: <Shield className="w-3 h-3" />, color: 'text-blue-400' },
+    orders: { icon: <Package className="w-3 h-3" />, color: 'text-purple-400' },
+    whatsapp: { icon: <MessageSquare className="w-3 h-3" />, color: 'text-green-400' },
+    crm: { icon: <User className="w-3 h-3" />, color: 'text-amber-400' },
+    admin: { icon: <ShieldCheck className="w-3 h-3" />, color: 'text-red-400' },
+    system: { icon: <Settings className="w-3 h-3" />, color: 'text-slate-400' },
+  }
+  return map[module] || map.system
+}
+
+function formatDate(dateStr: string) {
+  try {
+    const d = new Date(dateStr)
+    return d.toLocaleString('en-IN', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  } catch {
+    return dateStr
+  }
+}
+
+function timeAgo(dateStr: string) {
+  try {
+    const diff = Date.now() - new Date(dateStr).getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 1) return 'just now'
+    if (mins < 60) return `${mins}m ago`
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    if (days < 7) return `${days}d ago`
+    return formatDate(dateStr)
+  } catch {
+    return dateStr
+  }
+}
+
+function getRoleBadgeColor(role: string) {
+  if (role === 'super_admin') return 'bg-red-500/10 text-red-400 border-red-500/25'
+  if (role === 'admin') return 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+  return 'bg-slate-500/10 text-slate-400 border-slate-500/25'
+}
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
 export default function AuditLogsPage() {
+  // View mode
+  const [viewMode, setViewMode] = useState<'table' | 'timeline'>('table')
+
+  // Data
   const [logs, setLogs] = useState<AuditLog[]>([])
+  const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, per_page: LOGS_PER_PAGE, total: 0, total_pages: 1 })
   const [loading, setLoading] = useState(true)
+  const [pageLoading, setPageLoading] = useState(false)
+
+  // Filters
   const [searchTerm, setSearchTerm] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [selectedActionType, setSelectedActionType] = useState('ALL')
-  const [inspectLog, setInspectLog] = useState<AuditLog | null>(null)
+  const [selectedModule, setSelectedModule] = useState('all')
+  const [selectedStatus, setSelectedStatus] = useState('all')
+  const [filterUser, setFilterUser] = useState('')
+  const [filterIp, setFilterIp] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+
+  // UI
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
 
-  const fetchLogs = async () => {
+  // Refs
+  const fetchRef = useRef<AbortController | null>(null)
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 400)
+    return () => clearTimeout(timer)
+  }, [searchTerm])
+
+  // Reset page on filter change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [debouncedSearch, selectedActionType, selectedModule, selectedStatus, filterUser, filterIp, startDate, endDate])
+
+  // Fetch logs
+  const fetchLogs = useCallback(async (page: number, isInitial = false) => {
+    if (fetchRef.current) fetchRef.current.abort()
+    const controller = new AbortController()
+    fetchRef.current = controller
+
     try {
-      setLoading(true)
-      const res = await fetch('/api/audit-logs?limit=250')
+      if (isInitial) setLoading(true)
+      else setPageLoading(true)
+
+      const params = new URLSearchParams({
+        page: String(page),
+        per_page: String(LOGS_PER_PAGE),
+      })
+      if (debouncedSearch) params.set('search', debouncedSearch)
+      if (selectedActionType !== 'ALL') params.set('action_type', selectedActionType)
+      if (selectedModule !== 'all') params.set('module', selectedModule)
+      if (selectedStatus !== 'all') params.set('status', selectedStatus)
+      if (filterUser.trim()) params.set('user', filterUser.trim())
+      if (filterIp.trim()) params.set('ip', filterIp.trim())
+      if (startDate) params.set('start_date', startDate)
+      if (endDate) params.set('end_date', endDate)
+
+      const res = await fetch(`/api/audit-logs?${params.toString()}`, { signal: controller.signal })
       const data = await res.json()
+
       if (data.success && data.logs) {
         setLogs(data.logs)
+        if (data.pagination) setPagination(data.pagination)
       }
-    } catch (error) {
-      console.error('Failed to fetch audit logs:', error)
+    } catch (err: any) {
+      if (err.name === 'AbortError') return
+      console.error('Failed to fetch audit logs:', err)
     } finally {
       setLoading(false)
+      setPageLoading(false)
       setRefreshing(false)
     }
-  }
+  }, [debouncedSearch, selectedActionType, selectedModule, selectedStatus, filterUser, filterIp, startDate, endDate])
 
+  // Initial + reactive fetch
   useEffect(() => {
-    fetchLogs()
-  }, [])
+    fetchLogs(currentPage, currentPage === 1 && logs.length === 0)
+  }, [currentPage, fetchLogs])
 
   const handleRefresh = () => {
     setRefreshing(true)
-    fetchLogs()
+    fetchLogs(currentPage)
   }
 
   const handleCopyPayload = (payload: any) => {
@@ -68,76 +287,50 @@ export default function AuditLogsPage() {
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  // Filter logs based on search and selected action category
-  const filteredLogs = logs.filter(log => {
-    const matchesSearch = 
-      log.userEmail.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.actionType.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (log.ipAddress && log.ipAddress.includes(searchTerm))
-
-    const matchesAction = 
-      selectedActionType === 'ALL' ||
-      (selectedActionType === 'AUTH' && (log.actionType === 'USER_LOGIN' || log.actionType === 'USER_LOGOUT')) ||
-      (selectedActionType === 'TEMPLATES' && log.actionType.includes('TEMPLATE')) ||
-      (selectedActionType === 'JOURNEYS' && log.actionType.includes('JOURNEY')) ||
-      (selectedActionType === 'EMAIL' && log.actionType.includes('EMAIL'))
-
-    return matchesSearch && matchesAction
-  })
-
-  // Helper for color-coding action badges
-  const getActionBadgeStyle = (actionType: string) => {
-    switch (actionType) {
-      case 'USER_LOGIN':
-        return 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-      case 'USER_LOGOUT':
-        return 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
-      case 'CREATE_TEMPLATE':
-        return 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-      case 'UPDATE_TEMPLATE':
-        return 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30'
-      case 'DELETE_TEMPLATE':
-        return 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-      case 'UPDATE_JOURNEY_STATUS':
-        return 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-      case 'TRIGGER_TEST_RTO_EMAIL':
-        return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-      default:
-        return 'bg-slate-500/10 text-slate-400 border-slate-500/30'
-    }
+  const isSuspicious = (log: AuditLog) => {
+    return log.actionType === 'LOGIN_FAILED' || log.status === 'failure'
   }
 
-  // Helper to format date cleanly
-  const formatDate = (dateStr: string) => {
-    try {
-      const d = new Date(dateStr)
-      return d.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      })
-    } catch {
-      return dateStr
-    }
+  const isSuperAdmin = (log: AuditLog) => {
+    return log.userRole === 'super_admin' || log.userEmail === 'superadmin@fiberisefit.com'
   }
+
+  const activeFiltersCount = [
+    selectedActionType !== 'ALL',
+    selectedModule !== 'all',
+    selectedStatus !== 'all',
+    filterUser.trim() !== '',
+    filterIp.trim() !== '',
+    startDate !== '',
+    endDate !== '',
+  ].filter(Boolean).length
+
+  const clearFilters = () => {
+    setSelectedActionType('ALL')
+    setSelectedModule('all')
+    setSelectedStatus('all')
+    setFilterUser('')
+    setFilterIp('')
+    setStartDate('')
+    setEndDate('')
+    setSearchTerm('')
+  }
+
+  // Pagination
+  const goToPage = (p: number) => { if (p >= 1 && p <= pagination.total_pages) setCurrentPage(p) }
+
+  // ─── RENDER ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex">
-      {/* Sidebar Navigation */}
       <Sidebar />
-
-      {/* Main Content Area */}
       <main className="flex-1 lg:pl-64 min-w-0">
-        <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
-          
-          {/* Header Section */}
+        <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-5">
+
+          {/* ── Header ── */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-card/40 backdrop-blur-md p-6 rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl pointer-events-none"></div>
-            <div className="absolute bottom-0 left-0 w-48 h-48 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
-            
+            <div className="absolute top-0 right-0 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-48 h-48 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
             <div className="flex items-center gap-4">
               <div className="p-3 bg-purple-500/10 rounded-xl border border-purple-500/20 text-purple-400">
                 <ShieldCheck className="w-8 h-8" />
@@ -147,282 +340,513 @@ export default function AuditLogsPage() {
                   Security Audit Logs
                 </h1>
                 <p className="text-sm text-slate-400 mt-1">
-                  Non-deletable trace logs mapping active employee and admin actions across Fiberise Fit.
+                  Immutable trace logs — every action across Fiberise Fit is recorded here.
                 </p>
               </div>
             </div>
-
-            <button
-              onClick={handleRefresh}
-              disabled={loading || refreshing}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 active:bg-white/5 disabled:opacity-50 text-white rounded-xl border border-white/10 transition-all font-medium text-sm w-full sm:w-auto shadow-md"
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              Refresh Trace
-            </button>
+            <div className="flex items-center gap-2">
+              {/* View Toggle */}
+              <div className="flex items-center bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setViewMode('table')}
+                  className={`px-3 py-2.5 text-xs font-medium transition-all flex items-center gap-1.5 ${viewMode === 'table' ? 'bg-purple-500/20 text-purple-300' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <Table2 className="w-3.5 h-3.5" /> Table
+                </button>
+                <button
+                  onClick={() => setViewMode('timeline')}
+                  className={`px-3 py-2.5 text-xs font-medium transition-all flex items-center gap-1.5 ${viewMode === 'timeline' ? 'bg-purple-500/20 text-purple-300' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <LayoutList className="w-3.5 h-3.5" /> Timeline
+                </button>
+              </div>
+              <button
+                onClick={handleRefresh}
+                disabled={loading || refreshing}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-white rounded-xl border border-white/10 transition-all font-medium text-sm shadow-md"
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
 
-          {/* Filters Area */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Search Bar */}
-            <div className="md:col-span-2 relative">
-              <Search className="absolute left-4 top-3.5 w-5 h-5 text-slate-500" />
-              <input
-                type="text"
-                placeholder="Search by user email, action type, or IP address..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-[#0e121a]/80 border border-white/10 rounded-xl pl-12 pr-4 py-3.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/30 transition-all shadow-inner"
-              />
+          {/* ── Search & Filter Bar ── */}
+          <div className="space-y-3">
+            <div className="flex flex-col md:flex-row gap-3">
+              {/* Search */}
+              <div className="relative flex-1">
+                <Search className="absolute left-4 top-3.5 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Search by user, action, description, IP..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full bg-[#0e121a]/80 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/30 transition-all"
+                />
+              </div>
+
+              {/* Quick filters */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={selectedActionType}
+                  onChange={(e) => setSelectedActionType(e.target.value)}
+                  className="bg-[#0e121a]/80 border border-white/10 rounded-xl px-3 py-3 text-xs text-white focus:outline-none focus:border-purple-500/50 transition-all cursor-pointer"
+                >
+                  {ACTION_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+
+                <select
+                  value={selectedStatus}
+                  onChange={(e) => setSelectedStatus(e.target.value)}
+                  className="bg-[#0e121a]/80 border border-white/10 rounded-xl px-3 py-3 text-xs text-white focus:outline-none focus:border-purple-500/50 transition-all cursor-pointer"
+                >
+                  {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`flex items-center gap-1.5 px-3 py-3 rounded-xl border text-xs font-medium transition-all ${
+                    showFilters || activeFiltersCount > 0
+                      ? 'bg-purple-500/15 border-purple-500/30 text-purple-300'
+                      : 'bg-white/5 border-white/10 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Filter className="w-3.5 h-3.5" />
+                  Filters
+                  {activeFiltersCount > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 bg-purple-500/30 text-purple-200 text-[10px] rounded-full font-bold">
+                      {activeFiltersCount}
+                    </span>
+                  )}
+                </button>
+
+                {activeFiltersCount > 0 && (
+                  <button onClick={clearFilters} className="flex items-center gap-1 px-3 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium hover:bg-red-500/20 transition-all">
+                    <XCircle className="w-3.5 h-3.5" /> Clear All
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Action Type Dropdown */}
-            <select
-              value={selectedActionType}
-              onChange={(e) => setSelectedActionType(e.target.value)}
-              className="bg-[#0e121a]/80 border border-white/10 rounded-xl px-4 py-3.5 text-sm text-white focus:outline-none focus:border-purple-500/50 transition-all shadow-inner cursor-pointer"
-            >
-              <option value="ALL">All Event Categories</option>
-              <option value="AUTH">Authentication (Login/Logout)</option>
-              <option value="TEMPLATES">WhatsApp Templates Mappings</option>
-              <option value="JOURNEYS">WhatsApp Campaigns & Journeys</option>
-              <option value="EMAIL">System Email Triggers</option>
-            </select>
+            {/* Advanced Filters Panel */}
+            {showFilters && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-[#0e121a]/60 border border-white/5 rounded-xl p-4 animate-in slide-in-from-top-2 duration-200">
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase tracking-wider block mb-1.5 font-semibold">Module</label>
+                  <select
+                    value={selectedModule}
+                    onChange={(e) => setSelectedModule(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-500/50"
+                  >
+                    {MODULE_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase tracking-wider block mb-1.5 font-semibold">User Email</label>
+                  <input
+                    type="text"
+                    value={filterUser}
+                    onChange={(e) => setFilterUser(e.target.value)}
+                    placeholder="admin@fiberisefit.com"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 uppercase tracking-wider block mb-1.5 font-semibold">IP Address</label>
+                  <input
+                    type="text"
+                    value={filterIp}
+                    onChange={(e) => setFilterIp(e.target.value)}
+                    placeholder="192.168.1.1"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/50"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-slate-500 uppercase tracking-wider block mb-1.5 font-semibold">From</label>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-purple-500/50 [color-scheme:dark]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500 uppercase tracking-wider block mb-1.5 font-semibold">To</label>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-purple-500/50 [color-scheme:dark]"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Logs Table Card */}
+          {/* ── Main Content Card ── */}
           <div className="bg-card border border-white/10 rounded-2xl overflow-hidden shadow-2xl relative">
-            
-            {loading && logs.length === 0 ? (
-              // Loading Skeleton State
-              <div className="p-12 text-center flex flex-col items-center justify-center space-y-4">
-                <RefreshCw className="w-8 h-8 text-purple-500 animate-spin" />
-                <p className="text-slate-400 text-sm">Fetching verified audit data from secure collection...</p>
+            {/* Page transition overlay */}
+            {pageLoading && (
+              <div className="absolute inset-0 bg-[#07090e]/60 backdrop-blur-sm z-10 flex items-center justify-center rounded-2xl">
+                <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl px-5 py-3">
+                  <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
+                  <span className="text-sm text-white/70 font-medium">Loading audit data...</span>
+                </div>
               </div>
-            ) : filteredLogs.length === 0 ? (
-              // Empty State
+            )}
+
+            {loading ? (
+              /* Skeleton loading */
+              <div className="overflow-hidden">
+                <div className="grid grid-cols-6 gap-4 px-6 py-4 border-b border-white/5">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="h-3 bg-white/5 rounded animate-pulse" style={{ width: `${50 + Math.random() * 40}%` }} />
+                  ))}
+                </div>
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i} className="grid grid-cols-6 gap-4 px-6 py-5 border-b border-white/5" style={{ opacity: 1 - i * 0.08 }}>
+                    <div className="space-y-2"><div className="h-3 w-24 bg-white/8 rounded animate-pulse" /><div className="h-2.5 w-16 bg-white/5 rounded animate-pulse" /></div>
+                    <div className="space-y-2"><div className="h-3 w-28 bg-white/8 rounded animate-pulse" /><div className="h-2.5 w-20 bg-white/5 rounded animate-pulse" /></div>
+                    <div className="h-6 w-24 bg-white/5 rounded-md animate-pulse" />
+                    <div className="h-3 w-32 bg-white/5 rounded animate-pulse" />
+                    <div className="space-y-2"><div className="h-3 w-20 bg-white/8 rounded animate-pulse" /><div className="h-2.5 w-28 bg-white/5 rounded animate-pulse" /></div>
+                    <div className="h-7 w-16 bg-white/5 rounded-lg animate-pulse" />
+                  </div>
+                ))}
+                <div className="py-4 text-center">
+                  <p className="text-xs text-white/30 font-medium animate-pulse">Loading audit trace data from secure collection...</p>
+                </div>
+              </div>
+            ) : logs.length === 0 ? (
+              /* Empty state */
               <div className="p-16 text-center flex flex-col items-center justify-center space-y-4">
                 <div className="p-4 bg-white/5 rounded-full text-slate-500">
                   <Terminal className="w-8 h-8" />
                 </div>
-                <p className="text-white font-semibold text-lg">No audit matches found</p>
+                <p className="text-white font-semibold text-lg">No audit logs found</p>
                 <p className="text-slate-400 text-sm max-w-md mx-auto">
-                  Try adjusting your search criteria, selecting a different category dropdown, or triggering a new action.
+                  Try adjusting your filters, expanding the date range, or clearing all filters.
                 </p>
+                {activeFiltersCount > 0 && (
+                  <button onClick={clearFilters} className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-xs font-bold text-white transition-all">
+                    Clear All Filters
+                  </button>
+                )}
               </div>
-            ) : (
-              // Responsive Table Container
+            ) : viewMode === 'table' ? (
+              /* ═══ TABLE VIEW ═══ */
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-white/10 text-xs font-semibold text-slate-400 uppercase bg-white/2 select-none">
-                      <th className="px-6 py-4"><span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Timestamp</span></th>
-                      <th className="px-6 py-4"><span className="flex items-center gap-1.5"><User className="w-3.5 h-3.5" /> User Identity</span></th>
-                      <th className="px-6 py-4">Action Event</th>
-                      <th className="px-6 py-4"><span className="flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" /> IP & Agent</span></th>
-                      <th className="px-6 py-4 text-right">Details</th>
+                    <tr className="border-b border-white/10 text-xs font-semibold text-slate-400 uppercase bg-white/[0.02] select-none">
+                      <th className="px-5 py-4"><span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Timestamp</span></th>
+                      <th className="px-5 py-4"><span className="flex items-center gap-1.5"><User className="w-3.5 h-3.5" /> User</span></th>
+                      <th className="px-5 py-4">Action</th>
+                      <th className="px-5 py-4">Description</th>
+                      <th className="px-5 py-4"><span className="flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" /> Network</span></th>
+                      <th className="px-5 py-4 text-right">Inspect</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5 text-sm">
-                    {filteredLogs.map((log) => {
-                      const isSuperAdminLog = log.userEmail === 'superadmin@fiberisefit.com' || (log.details && log.details.role === 'super_admin');
+                    {logs.map((log) => {
+                      const colors = getActionColor(log.actionType, log.status)
+                      const suspicious = isSuspicious(log)
+                      const superAdmin = isSuperAdmin(log)
+                      const expanded = expandedLogId === log.id
+
                       return (
-                        <tr 
-                          key={log.id} 
-                          className={`transition-colors duration-150 group ${
-                            isSuperAdminLog 
-                              ? 'bg-gradient-to-r from-red-500/[0.03] to-transparent hover:from-red-500/[0.06]' 
-                              : 'hover:bg-white/2'
-                          }`}
-                        >
-                          {/* Timestamp */}
-                          <td className={`px-6 py-4 text-slate-300 font-mono text-xs whitespace-nowrap ${
-                            isSuperAdminLog 
-                              ? 'border-l-4 border-l-red-500/70 shadow-[inset_3px_0_0_0_rgba(239,68,68,0.2)] bg-red-950/[0.05]' 
-                              : ''
-                          }`}>
-                            {formatDate(log.timestamp)}
-                          </td>
+                        <tr key={log.id} className="group">
+                          {/* Wrapper row */}
+                          <td colSpan={6} className="p-0">
+                            {/* Main row content */}
+                            <div
+                              className={`grid grid-cols-[180px_200px_160px_1fr_200px_80px] items-center transition-colors cursor-pointer ${
+                                suspicious
+                                  ? 'bg-gradient-to-r from-red-500/[0.04] to-transparent hover:from-red-500/[0.07]'
+                                  : superAdmin
+                                  ? 'bg-gradient-to-r from-amber-500/[0.03] to-transparent hover:from-amber-500/[0.05]'
+                                  : 'hover:bg-white/[0.02]'
+                              }`}
+                              onClick={() => setExpandedLogId(expanded ? null : log.id)}
+                            >
+                              {/* Timestamp */}
+                              <div className={`px-5 py-4 ${suspicious ? 'border-l-3 border-l-red-500/70' : superAdmin ? 'border-l-3 border-l-amber-500/40' : ''}`}>
+                                <div className="text-xs text-slate-300 font-mono">{formatDate(log.timestamp)}</div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">{timeAgo(log.timestamp)}</div>
+                              </div>
 
-                          {/* User Identity */}
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex flex-col">
-                              <span className={`font-medium ${isSuperAdminLog ? 'text-red-200 font-semibold' : 'text-white'}`}>
-                                {log.userEmail}
-                              </span>
-                              <span className="text-[10px] text-slate-500 font-mono">ID: {log.userId.slice(0, 8)}...</span>
-                              {isSuperAdminLog && (
-                                <span className="inline-flex items-center gap-1.5 mt-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-red-500/10 text-red-400 border border-red-500/25 w-fit select-none font-mono shadow-[0_0_8px_rgba(239,68,68,0.15)]">
-                                  <span className="relative flex h-1.5 w-1.5">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500"></span>
-                                  </span>
-                                  IP TRACE ACTIVE
+                              {/* User */}
+                              <div className="px-5 py-4">
+                                <div className={`text-xs font-medium truncate ${superAdmin ? 'text-amber-200' : 'text-white'}`}>
+                                  {log.userName || log.userEmail?.split('@')[0]}
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate">{log.userEmail}</div>
+                                <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${getRoleBadgeColor(log.userRole)}`}>
+                                  {log.userRole?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}
                                 </span>
-                              )}
+                              </div>
+
+                              {/* Action Badge */}
+                              <div className="px-5 py-4">
+                                <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono border ${colors.bg} ${colors.text} ${colors.border}`}>
+                                  {getActionIcon(log.actionType)}
+                                  {log.actionType}
+                                </span>
+                                {log.status === 'failure' && (
+                                  <div className="flex items-center gap-1 mt-1.5 text-[10px] text-red-400 font-semibold">
+                                    <AlertTriangle className="w-3 h-3" /> FAILED
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Description */}
+                              <div className="px-5 py-4">
+                                <div className="text-xs text-slate-300 truncate max-w-xs" title={log.description}>
+                                  {log.description || '—'}
+                                </div>
+                                <div className="flex items-center gap-2 mt-1">
+                                  {(() => { const mb = getModuleBadge(log.module); return (
+                                    <span className={`inline-flex items-center gap-1 text-[10px] ${mb.color}`}>
+                                      {mb.icon} {log.module}
+                                    </span>
+                                  )})()}
+                                  <span className="text-[10px] text-slate-600 font-mono">{log.method} {log.path}</span>
+                                </div>
+                              </div>
+
+                              {/* Network */}
+                              <div className="px-5 py-4">
+                                <div className="flex items-center gap-1.5 text-xs text-slate-300 font-mono">
+                                  <span className={`w-1.5 h-1.5 rounded-full ${suspicious ? 'bg-red-500 animate-pulse' : 'bg-blue-500'}`} />
+                                  {log.ipAddress || 'N/A'}
+                                </div>
+                                <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                                  <Monitor className="w-3 h-3 flex-shrink-0" />
+                                  {log.browser || 'Unknown'} · {log.os || 'Unknown'}
+                                </div>
+                              </div>
+
+                              {/* Expand button */}
+                              <div className="px-5 py-4 text-right">
+                                <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg transition-all ${expanded ? 'bg-purple-500/20 text-purple-300' : 'bg-white/5 text-slate-400 group-hover:text-white'}`}>
+                                  {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                </span>
+                              </div>
                             </div>
-                          </td>
 
-                          {/* Action Event Badge */}
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono border ${
-                              isSuperAdminLog 
-                                ? 'bg-red-500/10 text-red-400 border-red-500/25 shadow-[0_0_6px_rgba(239,68,68,0.05)]' 
-                                : getActionBadgeStyle(log.actionType)
-                            }`}>
-                              {log.actionType}
-                            </span>
-                          </td>
+                            {/* Expanded details */}
+                            {expanded && (
+                              <div className="bg-[#0a0d14] border-t border-white/5 px-6 py-5 animate-in slide-in-from-top-1 duration-200">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                  <InfoCard label="User ID" value={log.userId} mono />
+                                  <InfoCard label="Session ID" value={log.sessionId || 'N/A'} mono />
+                                  <InfoCard label="Device" value={`${log.device || 'Unknown'}`} />
+                                  <InfoCard label="Full User Agent" value={log.userAgent || 'N/A'} mono truncate />
+                                </div>
 
-                          {/* Network Metadata (IP / Agent) */}
-                          <td className="px-6 py-4 max-w-xs truncate">
-                            <div className="flex flex-col gap-0.5 text-xs text-slate-400">
-                              <span className={`font-mono flex items-center gap-1.5 ${isSuperAdminLog ? 'text-red-200' : ''}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${
-                                  isSuperAdminLog 
-                                    ? 'bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.6)]' 
-                                    : 'bg-blue-500'
-                                }`}></span>
-                                {log.ipAddress || 'N/A'}
-                              </span>
-                              <span className="text-[10px] text-slate-500 truncate flex items-center gap-1" title={log.userAgent}>
-                                <Smartphone className="w-3 h-3 flex-shrink-0" />
-                                {log.userAgent || 'System'}
-                              </span>
-                            </div>
-                          </td>
+                                {/* Changes diff */}
+                                {log.changes && (log.changes.before || log.changes.after) && (
+                                  <div className="mb-4">
+                                    <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold mb-2">Data Changes</div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      {log.changes.before && (
+                                        <div>
+                                          <div className="text-[10px] text-red-400 font-semibold mb-1">Before</div>
+                                          <pre className="bg-red-500/5 border border-red-500/10 rounded-lg p-3 text-[11px] font-mono text-red-300 overflow-x-auto max-h-40">
+                                            {JSON.stringify(log.changes.before, null, 2)}
+                                          </pre>
+                                        </div>
+                                      )}
+                                      {log.changes.after && (
+                                        <div>
+                                          <div className="text-[10px] text-emerald-400 font-semibold mb-1">After</div>
+                                          <pre className="bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-3 text-[11px] font-mono text-emerald-300 overflow-x-auto max-h-40">
+                                            {JSON.stringify(log.changes.after, null, 2)}
+                                          </pre>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
 
-                          {/* Payload Inspection Trigger */}
-                        <td className="px-6 py-4 text-right whitespace-nowrap">
-                          <button
-                            onClick={() => setInspectLog(log)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-purple-500/20 active:bg-white/5 border border-white/10 hover:border-purple-500/30 text-slate-300 hover:text-purple-300 font-medium text-xs transition-all shadow-sm"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            Inspect
-                          </button>
-                        </td>
-                      </tr>
-                    )})}
+                                {/* Details payload */}
+                                {log.details && Object.keys(log.details).length > 0 && (
+                                  <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Payload</span>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); handleCopyPayload(log.details) }}
+                                        className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-purple-400 transition-colors"
+                                      >
+                                        {copiedId === 'payload' ? <><Check className="w-3 h-3 text-emerald-400" /><span className="text-emerald-400">Copied!</span></> : <><Copy className="w-3 h-3" /> Copy</>}
+                                      </button>
+                                    </div>
+                                    <pre className="bg-[#080a0f] border border-white/10 rounded-lg p-3 text-[11px] font-mono text-purple-300 overflow-x-auto max-h-48">
+                                      {JSON.stringify(log.details, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
+            ) : (
+              /* ═══ TIMELINE VIEW ═══ */
+              <div className="px-6 py-4 space-y-0">
+                {logs.map((log, idx) => {
+                  const colors = getActionColor(log.actionType, log.status)
+                  const suspicious = isSuspicious(log)
+                  const expanded = expandedLogId === log.id
+
+                  return (
+                    <div key={log.id} className="relative pl-8">
+                      {/* Timeline line */}
+                      {idx < logs.length - 1 && (
+                        <div className="absolute left-[15px] top-10 bottom-0 w-px bg-white/5" />
+                      )}
+                      {/* Timeline dot */}
+                      <div className={`absolute left-[8px] top-4 w-4 h-4 rounded-full border-2 border-[#07090e] ${colors.dot} ${suspicious ? 'animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.4)]' : ''}`} />
+
+                      <div
+                        className={`py-4 cursor-pointer group transition-all rounded-xl px-4 -ml-2 ${
+                          suspicious ? 'hover:bg-red-500/[0.04]' : 'hover:bg-white/[0.02]'
+                        }`}
+                        onClick={() => setExpandedLogId(expanded ? null : log.id)}
+                      >
+                        {/* Timeline header */}
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono border ${colors.bg} ${colors.text} ${colors.border}`}>
+                                {getActionIcon(log.actionType)}
+                                {log.actionType}
+                              </span>
+                              {log.status === 'failure' && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/10 text-red-400 border border-red-500/20">
+                                  <AlertTriangle className="w-3 h-3" /> FAILED
+                                </span>
+                              )}
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${getRoleBadgeColor(log.userRole)}`}>
+                                {log.userRole?.replace('_', ' ').toUpperCase()}
+                              </span>
+                            </div>
+                            <p className="text-sm text-white mt-1.5">{log.description || log.actionType}</p>
+                            <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-500">
+                              <span className="font-medium text-slate-400">{log.userEmail}</span>
+                              <span>·</span>
+                              <span className="font-mono">{log.ipAddress}</span>
+                              <span>·</span>
+                              <span>{log.browser} / {log.os}</span>
+                            </div>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <div className="text-xs text-slate-400">{timeAgo(log.timestamp)}</div>
+                            <div className="text-[10px] text-slate-600 font-mono mt-0.5">{formatDate(log.timestamp)}</div>
+                          </div>
+                        </div>
+
+                        {/* Timeline expanded */}
+                        {expanded && (
+                          <div className="mt-4 bg-[#0a0d14] border border-white/5 rounded-xl p-4 animate-in slide-in-from-top-1 duration-200">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-[11px]">
+                              <InfoCard label="Method · Path" value={`${log.method} ${log.path}`} mono />
+                              <InfoCard label="Device" value={log.device} />
+                              <InfoCard label="Session ID" value={log.sessionId || 'N/A'} mono />
+                              <InfoCard label="User Agent" value={log.userAgent} mono truncate />
+                            </div>
+                            {log.details && Object.keys(log.details).length > 0 && (
+                              <pre className="bg-[#080a0f] border border-white/10 rounded-lg p-3 text-[11px] font-mono text-purple-300 overflow-x-auto max-h-40">
+                                {JSON.stringify(log.details, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             )}
-            
-            {/* Table Footer Stats */}
-            <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between text-xs text-slate-500 bg-[#0c0f17]">
-              <span>Showing {filteredLogs.length} matching audit trace documents</span>
-              <span className="font-mono">Secure Non-Deletable DB Node</span>
-            </div>
-          </div>
-        </div>
-      </main>
 
-      {/* INSPECT LOG MODAL DRAWER */}
-      {inspectLog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          {/* Backdrop Glassmorphic Blur */}
-          <div 
-            onClick={() => setInspectLog(null)} 
-            className="absolute inset-0 bg-[#05060a]/80 backdrop-blur-sm transition-opacity duration-300"
-          ></div>
-
-          {/* Modal Container Card */}
-          <div className="bg-[#0e121a] border border-white/10 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl relative z-10 overflow-hidden transform scale-100 transition-transform duration-300">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-5 border-b border-white/5 bg-[#121722]">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-purple-500/10 border border-purple-500/20 rounded-lg text-purple-400">
-                  <Terminal className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-white text-base">Inspect Action Payload</h3>
-                  <p className="text-slate-500 text-xs mt-0.5 font-mono">{inspectLog.id}</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setInspectLog(null)}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 hover:text-white transition-colors text-slate-400"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Scrollable Body */}
-            <div className="p-6 overflow-y-auto space-y-5 text-sm">
-              {/* Event Metadata Cards Grid */}
-              <div className="grid grid-cols-2 gap-4 bg-[#121722]/50 border border-white/5 p-4 rounded-xl">
-                <div>
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold mb-0.5">Timestamp</span>
-                  <span className="text-slate-300 text-xs font-mono">{formatDate(inspectLog.timestamp)}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold mb-0.5">User Identity</span>
-                  <span className="text-slate-300 text-xs truncate block font-mono">{inspectLog.userEmail}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold mb-0.5">Action Event</span>
-                  <span className="text-purple-400 font-mono text-xs">{inspectLog.actionType}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold mb-0.5">Host IP</span>
-                  <span className="text-slate-300 text-xs font-mono">{inspectLog.ipAddress || 'N/A'}</span>
-                </div>
-              </div>
-
-              {/* JSON Payload Inspector */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400 font-semibold select-none px-1">
-                  <span>Structured Document Payload</span>
-                  <button 
-                    onClick={() => handleCopyPayload(inspectLog.details)}
-                    className="flex items-center gap-1 hover:text-purple-400 transition-colors"
-                  >
-                    {copiedId === 'payload' ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="text-emerald-400">Copied!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy Code</span>
-                      </>
-                    )}
+            {/* ── Footer: Pagination ── */}
+            {!loading && logs.length > 0 && (
+              <div className="px-6 py-4 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs bg-[#0c0f17]">
+                <span className="text-slate-500">
+                  Showing {((pagination.page - 1) * pagination.per_page) + 1}–{Math.min(pagination.page * pagination.per_page, pagination.total)} of {pagination.total} audit records
+                </span>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => goToPage(1)} disabled={currentPage === 1} className="p-1.5 rounded-lg bg-white/5 text-slate-400 hover:text-white disabled:opacity-30 transition-all border border-white/5">
+                    <ChevronsLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 1} className="p-1.5 rounded-lg bg-white/5 text-slate-400 hover:text-white disabled:opacity-30 transition-all border border-white/5">
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  {(() => {
+                    const pages: number[] = []
+                    const total = pagination.total_pages
+                    let start = Math.max(1, currentPage - 2)
+                    let end = Math.min(total, start + 4)
+                    start = Math.max(1, end - 4)
+                    for (let p = start; p <= end; p++) pages.push(p)
+                    return pages.map(p => (
+                      <button
+                        key={p}
+                        onClick={() => goToPage(p)}
+                        className={`min-w-[32px] h-8 rounded-lg text-xs font-semibold transition-all border ${
+                          p === currentPage
+                            ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                            : 'bg-white/5 text-slate-400 hover:text-white border-white/5'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))
+                  })()}
+                  <button onClick={() => goToPage(currentPage + 1)} disabled={currentPage === pagination.total_pages} className="p-1.5 rounded-lg bg-white/5 text-slate-400 hover:text-white disabled:opacity-30 transition-all border border-white/5">
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => goToPage(pagination.total_pages)} disabled={currentPage === pagination.total_pages} className="p-1.5 rounded-lg bg-white/5 text-slate-400 hover:text-white disabled:opacity-30 transition-all border border-white/5">
+                    <ChevronsRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
-
-                <div className="bg-[#080a0f] border border-white/10 rounded-xl p-4 overflow-x-auto max-h-[300px]">
-                  <pre className="text-xs font-mono text-purple-300 leading-relaxed tab-size-2">
-                    {JSON.stringify(inspectLog.details, null, 2)}
-                  </pre>
-                </div>
               </div>
+            )}
+          </div>
 
-              {/* Security Trace Warning */}
-              <div className="bg-amber-500/5 border border-amber-500/20 p-4 rounded-xl flex items-start gap-3">
-                <span className="text-xl">⚠️</span>
-                <div>
-                  <strong className="text-amber-400 text-xs block uppercase tracking-wider mb-0.5">Immutable Record Notice</strong>
-                  <p className="text-[11px] text-amber-300/80 leading-relaxed">
-                    This document log was written directly to the secure Firestore ledger `action_logs` and cannot be modified or deleted by dashboard employees, supervisors, or administrators.
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            {/* Modal Footer */}
-            <div className="px-6 py-4 border-t border-white/5 bg-[#121722]/50 flex items-center justify-end">
-              <button 
-                onClick={() => setInspectLog(null)}
-                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white border border-white/10 rounded-xl text-sm transition-all"
-              >
-                Close Inspector
-              </button>
+          {/* ── Security Notice ── */}
+          <div className="bg-amber-500/5 border border-amber-500/15 p-4 rounded-xl flex items-start gap-3">
+            <span className="text-lg">🔒</span>
+            <div>
+              <strong className="text-amber-400 text-xs block uppercase tracking-wider mb-0.5">Immutable Record System</strong>
+              <p className="text-[11px] text-amber-300/70 leading-relaxed">
+                All audit logs are written to a secure Firestore collection and cannot be modified, deleted, or tampered with by any dashboard user — including super administrators.
+              </p>
             </div>
           </div>
+
         </div>
-      )}
+      </main>
+    </div>
+  )
+}
+
+// ─── Small Reusable Components ───────────────────────────────────────────────
+
+function InfoCard({ label, value, mono, truncate: doTruncate }: { label: string; value: string; mono?: boolean; truncate?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold mb-0.5">{label}</div>
+      <div className={`text-xs text-slate-300 ${mono ? 'font-mono' : ''} ${doTruncate ? 'truncate' : ''}`} title={doTruncate ? value : undefined}>
+        {value || 'N/A'}
+      </div>
     </div>
   )
 }

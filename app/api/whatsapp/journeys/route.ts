@@ -80,13 +80,16 @@ export async function PATCH(req: NextRequest) {
 
     // Trace action
     const { userId, email } = getSessionInfo(req);
-    await logAction(
+    logAction({
       userId,
-      email,
-      'UPDATE_JOURNEY_STATUS',
-      { journeyId, status },
-      req
-    );
+      userEmail: email,
+      actionType: 'UPDATE_JOURNEY_STATUS',
+      description: `Updated journey ${journeyId} status to "${status}"`,
+      module: 'whatsapp',
+      status: 'success',
+      details: { journeyId, status },
+      req,
+    });
 
     return NextResponse.json(
       { success: true, journeyId, status },

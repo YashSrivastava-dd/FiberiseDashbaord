@@ -170,8 +170,15 @@ export default function ShiprocketDashboardPage() {
 
   // Search & Basic Sorting States
   const [searchQuery, setSearchQuery] = useState<string>('')
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
   const [showFiltersPanel, setShowFiltersPanel] = useState<boolean>(false)
+
+  // Debounce search input — only trigger API calls after 400ms of idle typing
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(searchQuery), 400)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   // ─── CATEGORIZED ADVANCED SHIPROCKET FILTERS ───
   
@@ -304,8 +311,9 @@ export default function ShiprocketDashboardPage() {
       setCurrentPage(1)
       triggerNotification('success', `Order cloned successfully! Showing in All Orders.`)
 
-      // After 800ms, re-fetch page 1 from server to sync the injected cache entry
+      // After 800ms, invalidate page cache and re-fetch page 1 from server
       setTimeout(() => {
+        invalidatePageCache()
         fetchOrdersPage(1, false)
       }, 800)
     } catch (err: any) {
@@ -350,6 +358,22 @@ export default function ShiprocketDashboardPage() {
   // ── Fetch Paginated Orders ──
   const fetchPageRef = useRef<AbortController | null>(null)
 
+  // Client-side page cache — avoids re-fetching pages already visited within the same filter context
+  const PAGE_CACHE_TTL = 30_000 // 30 seconds
+  interface PageCacheEntry {
+    orders: ShopifyOrder[]
+    pagination: { total: number; total_pages: number }
+    tabCounts: Record<string, number>
+    isOffline: boolean
+    timestamp: number
+  }
+  const pageCacheRef = useRef<Map<string, PageCacheEntry>>(new Map())
+
+  // Invalidate entire page cache (call after mutations like clone, cancel, etc.)
+  const invalidatePageCache = useCallback(() => {
+    pageCacheRef.current.clear()
+  }, [])
+
   const fetchOrdersPage = useCallback(async (page: number, isInitial = false) => {
     // Abort any in-flight page request
     if (fetchPageRef.current) {
@@ -364,33 +388,50 @@ export default function ShiprocketDashboardPage() {
       syncTimeoutRef.current = null
     }
 
+    // Build url search params containing page, size, tab, and advanced filters
+    const queryParams = new URLSearchParams({
+      page: String(page),
+      per_page: String(ORDERS_PER_PAGE),
+      tab: currentTab,
+    })
+
+    if (debouncedSearchQuery) queryParams.set('search', debouncedSearchQuery)
+    if (financialFilter !== 'all') queryParams.set('financial', financialFilter)
+    if (filterPaymentType !== 'all') queryParams.set('payment', filterPaymentType)
+    if (filterChannel !== 'all') queryParams.set('channel', filterChannel)
+    if (filterCourier !== 'all') queryParams.set('courier', filterCourier)
+    if (filterPickupLocation !== 'all') queryParams.set('pickup', filterPickupLocation)
+    if (filterWeightClass !== 'all') queryParams.set('weight', filterWeightClass)
+    if (filterRtoRisk !== 'all') queryParams.set('rto', filterRtoRisk)
+    if (minPrice) queryParams.set('min_price', minPrice)
+    if (maxPrice) queryParams.set('max_price', maxPrice)
+    if (datePreset !== 'all') queryParams.set('date_preset', datePreset)
+    if (startDate) queryParams.set('start_date', startDate)
+    if (endDate) queryParams.set('end_date', endDate)
+    if (filterFulfillmentStatus !== 'all') queryParams.set('fulfillment', filterFulfillmentStatus)
+
+    const cacheKey = queryParams.toString()
+
+    // Check client-side page cache first (not for initial load or sync retries)
+    if (!isInitial) {
+      const cached = pageCacheRef.current.get(cacheKey)
+      if (cached && (Date.now() - cached.timestamp) < PAGE_CACHE_TTL) {
+        setOrders(cached.orders)
+        setIsOffline(cached.isOffline)
+        setTotalOrders(cached.pagination.total)
+        setTotalPages(cached.pagination.total_pages)
+        setServerTabCounts(cached.tabCounts)
+        setError(null)
+        setPageLoading(false)
+        return
+      }
+    }
+
     try {
       if (isInitial) setLoading(true)
       else setPageLoading(true)
 
-      // Build url search params containing page, size, tab, and advanced filters
-      const queryParams = new URLSearchParams({
-        page: String(page),
-        per_page: String(ORDERS_PER_PAGE),
-        tab: currentTab,
-      })
-
-      if (searchQuery) queryParams.set('search', searchQuery)
-      if (financialFilter !== 'all') queryParams.set('financial', financialFilter)
-      if (filterPaymentType !== 'all') queryParams.set('payment', filterPaymentType)
-      if (filterChannel !== 'all') queryParams.set('channel', filterChannel)
-      if (filterCourier !== 'all') queryParams.set('courier', filterCourier)
-      if (filterPickupLocation !== 'all') queryParams.set('pickup', filterPickupLocation)
-      if (filterWeightClass !== 'all') queryParams.set('weight', filterWeightClass)
-      if (filterRtoRisk !== 'all') queryParams.set('rto', filterRtoRisk)
-      if (minPrice) queryParams.set('min_price', minPrice)
-      if (maxPrice) queryParams.set('max_price', maxPrice)
-      if (datePreset !== 'all') queryParams.set('date_preset', datePreset)
-      if (startDate) queryParams.set('start_date', startDate)
-      if (endDate) queryParams.set('end_date', endDate)
-      if (filterFulfillmentStatus !== 'all') queryParams.set('fulfillment', filterFulfillmentStatus)
-
-      const res = await fetch(`/api/shopify/orders?${queryParams.toString()}`, {
+      const res = await fetch(`/api/shopify/orders?${cacheKey}`, {
         signal: controller.signal
       })
       const data = await res.json()
@@ -428,6 +469,15 @@ export default function ShiprocketDashboardPage() {
       if (data.tabCounts) {
         setServerTabCounts(data.tabCounts)
       }
+
+      // Store in client-side page cache
+      pageCacheRef.current.set(cacheKey, {
+        orders: enriched,
+        pagination: { total: data.pagination?.total || 0, total_pages: data.pagination?.total_pages || 1 },
+        tabCounts: data.tabCounts || {},
+        isOffline: !!data.isOffline,
+        timestamp: Date.now(),
+      })
     } catch (err: any) {
       if (err.name === 'AbortError') return // Ignore aborted requests
       setError(err.message)
@@ -441,7 +491,7 @@ export default function ShiprocketDashboardPage() {
   }, [
     ORDERS_PER_PAGE,
     currentTab,
-    searchQuery,
+    debouncedSearchQuery,
     financialFilter,
     filterPaymentType,
     filterChannel,
@@ -472,12 +522,12 @@ export default function ShiprocketDashboardPage() {
     fetchOrdersPage(currentPage)
   }, [currentPage, fetchOrdersPage])
 
-  // Reset currentPage to 1 when filters or tab change to prevent out-of-bounds pagination
+  // Reset currentPage to 1 when filters, tab, or debounced search change
   useEffect(() => {
     setCurrentPage(1)
   }, [
     currentTab,
-    searchQuery,
+    debouncedSearchQuery,
     financialFilter,
     filterPaymentType,
     filterChannel,
@@ -491,6 +541,7 @@ export default function ShiprocketDashboardPage() {
     startDate,
     endDate,
     filterFulfillmentStatus,
+    sortOrder,
   ])
 
   // Component unmount cleanup
@@ -552,26 +603,6 @@ export default function ShiprocketDashboardPage() {
     }
   }, [])
 
-  // Reset pagination on filter or search changes
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [
-    searchQuery,
-    sortOrder,
-    datePreset,
-    startDate,
-    endDate,
-    filterChannel,
-    filterCourier,
-    filterPickupLocation,
-    filterWeightClass,
-    filterRtoRisk,
-    filterPaymentType,
-    financialFilter,
-    filterFulfillmentStatus,
-    minPrice,
-    maxPrice
-  ])
 
 
   // ── Logistics Actions Simulations ──
@@ -667,6 +698,7 @@ export default function ShiprocketDashboardPage() {
         return o
       }))
       setActiveDetailOrder(null)
+      invalidatePageCache()
       triggerNotification('success', 'Order cancelled successfully.')
     } catch (err: any) {
       triggerNotification('error', err.message || 'Error cancelling order.')
@@ -708,6 +740,7 @@ export default function ShiprocketDashboardPage() {
         return o
       }))
       setSelectedOrders({})
+      invalidatePageCache()
       triggerNotification('success', `Successfully cancelled ${selectedIds.length} orders.`)
     } catch (err: any) {
       triggerNotification('error', err.message || 'Error bulk cancelling orders.')
@@ -765,151 +798,18 @@ export default function ShiprocketDashboardPage() {
     filterFulfillmentStatus !== 'all'
   ].filter(Boolean).length
 
-  // Filter Shopify orders across search terms & filter cards
-  const filteredOrders = orders.filter((order) => {
-    // 1. Text Search terms
-    const q = searchQuery.toLowerCase().trim()
-    if (q) {
-      const orderName = order.name?.toLowerCase() || ''
-      const orderId = order.id?.toString() || ''
-      const customerName = order.customer
-        ? `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.toLowerCase()
-        : ''
-      const customerEmail = order.customer?.email?.toLowerCase() || ''
-      
-      const matchesQuery =
-        orderName.includes(q) ||
-        orderId.includes(q) ||
-        customerName.includes(q) ||
-        customerEmail.includes(q)
-
-      if (!matchesQuery) return false
-    }
-
-    // 2. Financial Status
-    if (financialFilter !== 'all') {
-      const status = order.financial_status?.toLowerCase() || ''
-      if (status !== financialFilter.toLowerCase()) return false
-    }
-
-    // 3. Payment Type (COD vs Prepaid)
-    if (filterPaymentType !== 'all') {
-      const isPaid = order.financial_status?.toLowerCase() === 'paid'
-      const matchesCod = filterPaymentType === 'cod' && !isPaid
-      const matchesPrepaid = filterPaymentType === 'prepaid' && isPaid
-      if (!matchesCod && !matchesPrepaid) return false
-    }
-
-    // 4. Sales Channel
-    if (filterChannel !== 'all') {
-      if (filterChannel === 'shopify') {
-        // all orders are Shopify in this current project database
-      } else {
-        return false // mock mismatch for other channels
-      }
-    }
-
-    // 5. Courier Partner
-    if (filterCourier !== 'all') {
-      const activeCourier = order.fulfillments?.[0]?.tracking_company?.toLowerCase() || ''
-      if (!activeCourier.includes(filterCourier.toLowerCase())) return false
-    }
-
-    // 6. Pickup Location
-    if (filterPickupLocation !== 'all') {
-      if (filterPickupLocation !== 'primary') return false // only primary has data
-    }
-
-    // 7. Weight Class Range
-    if (filterWeightClass !== 'all') {
-      const weight = 0.45 // Mock dead weight (0.45 kg)
-      if (filterWeightClass === 'under_05' && weight >= 0.5) return false
-      if (filterWeightClass === '05_to_1' && (weight < 0.5 || weight > 1.0)) return false
-      if (filterWeightClass === '1_to_2' && (weight < 1.0 || weight > 2.0)) return false
-      if (filterWeightClass === 'above_2' && weight <= 2.0) return false
-    }
-
-    // 8. RTO Risk Level
-    if (filterRtoRisk !== 'all') {
-      const risk = getRtoRisk(order).score.toLowerCase()
-      if (!risk.includes(filterRtoRisk.toLowerCase())) return false
-    }
-
-    // 9. Price boundaries
-    const price = parseFloat(order.total_price)
-    if (!isNaN(price)) {
-      if (minPrice && price < parseFloat(minPrice)) return false
-      if (maxPrice && price > parseFloat(maxPrice)) return false
-    }
-
-    // 10. Date boundaries & Presets
-    let resolvedStart = startDate
-    let resolvedEnd = endDate
-
-    if (datePreset !== 'all') {
-      const now = new Date()
-      if (datePreset === 'today') {
-        const start = new Date()
-        start.setHours(0, 0, 0, 0)
-        resolvedStart = start.toISOString()
-        resolvedEnd = now.toISOString()
-      } else if (datePreset === 'yesterday') {
-        const start = new Date()
-        start.setDate(now.getDate() - 1)
-        start.setHours(0, 0, 0, 0)
-        const end = new Date()
-        end.setDate(now.getDate() - 1)
-        end.setHours(23, 59, 59, 999)
-        resolvedStart = start.toISOString()
-        resolvedEnd = end.toISOString()
-      } else if (datePreset === '7days') {
-        const start = new Date()
-        start.setDate(now.getDate() - 7)
-        start.setHours(0, 0, 0, 0)
-        resolvedStart = start.toISOString()
-        resolvedEnd = now.toISOString()
-      } else if (datePreset === '30days') {
-        const start = new Date()
-        start.setDate(now.getDate() - 30)
-        start.setHours(0, 0, 0, 0)
-        resolvedStart = start.toISOString()
-        resolvedEnd = now.toISOString()
-      }
-    }
-
-    if (resolvedStart || resolvedEnd) {
-      const orderDate = new Date(order.created_at)
-      if (resolvedStart) {
-        const start = new Date(resolvedStart)
-        if (orderDate < start) return false
-      }
-      if (resolvedEnd) {
-        const end = new Date(resolvedEnd)
-        if (orderDate > end) return false
-      }
-    }
-
-    // 11. Fulfillment / Delivery stage sub-status
-    if (filterFulfillmentStatus !== 'all') {
-      const delInfo = getDeliveryStatusInfo(order)
-      if (delInfo.label.toLowerCase() !== filterFulfillmentStatus.toLowerCase()) return false
-    }
-
-    return true
-  })
-
-  // Orders are already paginated from server; apply client-side filtering/sorting for the current page
-  const paginatedOrders = filteredOrders
-    .sort((a, b) => {
-      if (currentTab === 'rto') {
-        const dateA = new Date(a.fulfillments?.[0]?.created_at || a.created_at).getTime()
-        const dateB = new Date(b.fulfillments?.[0]?.created_at || b.created_at).getTime()
-        return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
-      }
-      const dateA = new Date(a.created_at).getTime()
-      const dateB = new Date(b.created_at).getTime()
+  // All filtering is handled server-side by getCachedOrdersFiltered().
+  // Client-side only needs to apply sort order (which is not sent to the API).
+  const paginatedOrders = [...orders].sort((a, b) => {
+    if (currentTab === 'rto') {
+      const dateA = new Date(a.fulfillments?.[0]?.created_at || a.created_at).getTime()
+      const dateB = new Date(b.fulfillments?.[0]?.created_at || b.created_at).getTime()
       return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
-    })
+    }
+    const dateA = new Date(a.created_at).getTime()
+    const dateB = new Date(b.created_at).getTime()
+    return sortOrder === 'desc' ? dateB - dateA : dateA - dateB
+  })
 
   // Server-driven pagination metadata
   const startIndex = (currentPage - 1) * ORDERS_PER_PAGE
@@ -1239,7 +1139,7 @@ export default function ShiprocketDashboardPage() {
                 <div className="flex justify-between items-center mt-4 pt-3 border-t border-white/5 text-xs font-semibold">
                   <span className="text-white/40">
                     {activeFiltersCount > 0
-                      ? `Active criteria: ${activeFiltersCount} applied · Resolving ${filteredOrders.length} matching shipments`
+                      ? `Active criteria: ${activeFiltersCount} applied · Resolving ${totalOrders} matching shipments`
                       : 'All Shiprocket filter categories are currently in neutral state.'}
                   </span>
                   <div className="flex gap-2">
@@ -1405,9 +1305,57 @@ export default function ShiprocketDashboardPage() {
               </div>
             )}
             {loading ? (
-              <div className="py-24 text-center">
-                <Loader2 className="w-10 h-10 animate-spin text-purple-400 mx-auto mb-4" />
-                <p className="text-sm text-white/50 font-medium">Synchronizing with Shopify & Shiprocket API...</p>
+              <div className="overflow-hidden">
+                {/* Skeleton Table Header */}
+                <div className="grid grid-cols-7 gap-4 px-6 py-4 border-b border-white/5">
+                  {['Order Details', 'Customer Details', 'Product Details', 'Package Details', 'Payment', 'Pickup Address', ''].map((h, i) => (
+                    <div key={i} className="h-3.5 bg-white/5 rounded-md animate-pulse" style={{ width: h ? `${60 + Math.random() * 40}%` : '30%' }} />
+                  ))}
+                </div>
+                {/* Skeleton Rows */}
+                {Array.from({ length: 7 }).map((_, rowIdx) => (
+                  <div key={rowIdx} className="grid grid-cols-7 gap-4 px-6 py-5 border-b border-white/5" style={{ opacity: 1 - rowIdx * 0.08 }}>
+                    {/* Order Details col */}
+                    <div className="space-y-2">
+                      <div className="h-3.5 w-16 bg-white/8 rounded animate-pulse" />
+                      <div className="h-2.5 w-24 bg-white/5 rounded animate-pulse" />
+                      <div className="h-2.5 w-20 bg-white/5 rounded animate-pulse" />
+                    </div>
+                    {/* Customer Details col */}
+                    <div className="space-y-2">
+                      <div className="h-3.5 w-28 bg-white/8 rounded animate-pulse" />
+                      <div className="h-2.5 w-20 bg-white/5 rounded animate-pulse" />
+                      <div className="h-2.5 w-36 bg-white/5 rounded animate-pulse" />
+                    </div>
+                    {/* Product Details col */}
+                    <div className="space-y-2">
+                      <div className="h-3.5 w-24 bg-white/8 rounded animate-pulse" />
+                      <div className="h-2.5 w-20 bg-white/5 rounded animate-pulse" />
+                    </div>
+                    {/* Package Details col */}
+                    <div className="space-y-2">
+                      <div className="h-3.5 w-20 bg-white/8 rounded animate-pulse" />
+                      <div className="h-2.5 w-28 bg-white/5 rounded animate-pulse" />
+                    </div>
+                    {/* Payment col */}
+                    <div className="space-y-2">
+                      <div className="h-3.5 w-16 bg-white/8 rounded animate-pulse" />
+                      <div className="h-5 w-14 bg-purple-500/10 rounded-md animate-pulse" />
+                    </div>
+                    {/* Pickup Address col */}
+                    <div className="space-y-2">
+                      <div className="h-3.5 w-16 bg-white/8 rounded animate-pulse" />
+                    </div>
+                    {/* Actions col */}
+                    <div className="flex gap-1.5 items-center">
+                      <div className="h-7 w-7 bg-white/5 rounded-lg animate-pulse" />
+                      <div className="h-7 w-7 bg-white/5 rounded-lg animate-pulse" />
+                    </div>
+                  </div>
+                ))}
+                <div className="py-4 text-center">
+                  <p className="text-xs text-white/30 font-medium animate-pulse">Synchronizing with Shopify & Shiprocket API...</p>
+                </div>
               </div>
             ) : paginatedOrders.length === 0 && currentTab !== 'pickups_manifests' ? (
               <div className="py-20 text-center">

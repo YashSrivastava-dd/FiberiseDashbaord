@@ -3,6 +3,35 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { decryptSession, validateSession } from '@/src/services/auth'
 
+function formatToIPv4(ip: string): string {
+  if (!ip || ip === 'N/A') return '127.0.0.1'
+  let cleanIp = ip.trim()
+
+  // Handle brackets (commonly surrounding IPv6 addresses in URLs, e.g. [::1]:3000)
+  if (cleanIp.startsWith('[') && cleanIp.includes(']')) {
+    const endBracket = cleanIp.indexOf(']')
+    cleanIp = cleanIp.substring(1, endBracket)
+  } else {
+    // If it's IPv4 or standard IP, strip port if there is one colon
+    const colonCount = (cleanIp.match(/:/g) || []).length
+    if (colonCount === 1) {
+      cleanIp = cleanIp.split(':')[0]
+    }
+  }
+
+  // Handle loopbacks
+  if (cleanIp === '::1' || cleanIp === '::') {
+    return '127.0.0.1'
+  }
+
+  // Handle IPv6 mapped IPv4 format
+  if (cleanIp.startsWith('::ffff:')) {
+    return cleanIp.substring(7)
+  }
+
+  return cleanIp
+}
+
 export async function GET(req: NextRequest) {
   try {
     const sessionCookie = req.cookies.get('fiberise_session')?.value
@@ -54,6 +83,7 @@ export async function GET(req: NextRequest) {
     } else {
       ipAddress = (req as any).ip || '127.0.0.1'
     }
+    ipAddress = formatToIPv4(ipAddress)
 
     return NextResponse.json(
       {

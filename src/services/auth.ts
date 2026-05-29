@@ -83,10 +83,13 @@ export async function validateSession(session: SessionData): Promise<boolean> {
   }
 }
 
+let isSeeded = false
+
 /**
  * Self-seeding helper to ensure all role levels exist in Firestore
  */
 export async function seedAdminUser(): Promise<void> {
+  if (isSeeded) return
   try {
     const app = getFirebaseAdmin()
     const db = admin.firestore(app)
@@ -121,6 +124,7 @@ export async function seedAdminUser(): Promise<void> {
     // Seed Employee
     await seedUserIfMissing('employee@fiberisefit.com', 'employee@1234', 'employee')
 
+    isSeeded = true
   } catch (error) {
     console.error('❌ Failed to seed default users:', error)
   }

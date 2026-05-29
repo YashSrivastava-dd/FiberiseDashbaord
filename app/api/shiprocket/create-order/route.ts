@@ -16,6 +16,23 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Extract session for audit attribution
+    let auditEmail = 'unknown'
+    let auditRole = 'unknown'
+    let auditSessionId = ''
+    try {
+      const { decryptSession } = require('@/src/services/auth')
+      const sessionCookie = req.cookies.get('fiberise_session')?.value
+      if (sessionCookie) {
+        const session = decryptSession(sessionCookie)
+        if (session) {
+          auditEmail = session.email || 'unknown'
+          auditRole = session.role || 'unknown'
+          auditSessionId = session.sessionId || ''
+        }
+      }
+    } catch {}
+
     const data = await createShiprocketAdhocOrder(body)
     if (data.status_code === 0) {
       return NextResponse.json(
@@ -79,6 +96,30 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       console.error('⚠️ Failed to add cloned order to cache:', e)
     }
+
+    // Fire-and-forget audit log for order creation
+    try {
+      const { logAction } = require('@/src/services/auditLogService')
+      logAction({
+        userId: auditEmail,
+        userEmail: auditEmail,
+        userRole: auditRole,
+        sessionId: auditSessionId,
+        actionType: 'ORDER_CREATE',
+        description: `Created/cloned order ${body.order_id} via Shiprocket (₹${body.sub_total || 0})`,
+        module: 'orders',
+        status: 'success',
+        details: {
+          orderId: body.order_id,
+          shiprocketOrderId: data.order_id,
+          customer: body.billing_customer_name || '',
+          amount: body.sub_total || 0,
+          paymentMethod: body.payment_method || '',
+          items: body.order_items?.length || 0,
+        },
+        req,
+      })
+    } catch {}
 
     // Return order data to the client, including the sanitized phone for UI use
     return NextResponse.json({ ...data, billing_phone: body.billing_phone || '' }, { status: 200 })

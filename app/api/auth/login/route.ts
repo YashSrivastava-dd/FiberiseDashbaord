@@ -29,6 +29,17 @@ export async function POST(req: NextRequest) {
     const query = await db.collection('users').where('email', '==', email).limit(1).get()
 
     if (query.empty) {
+      // Log failed login — unknown email
+      logAction({
+        userId: 'unknown',
+        userEmail: email,
+        actionType: 'LOGIN_FAILED',
+        description: `Failed login attempt for unknown email: ${email}`,
+        module: 'auth',
+        status: 'failure',
+        details: { reason: 'Email not found' },
+        req,
+      })
       return NextResponse.json(
         { error: 'Invalid email or password.' },
         { status: 401 },
@@ -41,6 +52,19 @@ export async function POST(req: NextRequest) {
     // 3. Hash input password with saved salt and verify
     const computedHash = hashPassword(password, userData.salt)
     if (computedHash !== userData.passwordHash) {
+      // Log failed login — wrong password
+      logAction({
+        userId: userDoc.id,
+        userEmail: email,
+        userName: userData.email?.split('@')[0] || '',
+        userRole: userData.role || 'user',
+        actionType: 'LOGIN_FAILED',
+        description: `Failed login attempt for ${email} — incorrect password`,
+        module: 'auth',
+        status: 'failure',
+        details: { reason: 'Invalid password' },
+        req,
+      })
       return NextResponse.json(
         { error: 'Invalid email or password.' },
         { status: 401 },
@@ -57,7 +81,9 @@ export async function POST(req: NextRequest) {
     })
 
     // 4. Session payload
-    const expiresAt = Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+    const rememberMe = !!body?.rememberMe
+    const duration = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
+    const expiresAt = Date.now() + duration
     const tokenPayload = {
       email: userData.email,
       role: userData.role || 'user',
@@ -84,17 +110,23 @@ export async function POST(req: NextRequest) {
       secure: isHttps,
       sameSite: 'lax',
       path: '/',
-      maxAge: 24 * 60 * 60, // 24 hours in seconds
+      maxAge: Math.floor(duration / 1000),
     })
 
-    // Log audit trail event
-    await logAction(
-      userDoc.id,
-      userData.email,
-      'USER_LOGIN',
-      { role: userData.role || 'user' },
-      req
-    )
+    // Log successful login (fire-and-forget)
+    logAction({
+      userId: userDoc.id,
+      userEmail: userData.email,
+      userName: userData.email?.split('@')[0] || '',
+      userRole: userData.role || 'user',
+      sessionId,
+      actionType: 'USER_LOGIN',
+      description: `${userData.email} logged in successfully`,
+      module: 'auth',
+      status: 'success',
+      details: { role: userData.role || 'user' },
+      req,
+    })
 
     return res
   } catch (error: any) {
