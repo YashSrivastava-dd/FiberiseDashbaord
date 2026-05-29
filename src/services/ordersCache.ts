@@ -76,6 +76,7 @@ export interface OrderFilters {
   startDate?: string
   endDate?: string
   fulfillmentStatus?: string
+  is_test_order?: boolean
 }
 
 export function getCachedOrdersCount(filters: OrderFilters = {}): number {
@@ -116,6 +117,7 @@ export interface TabCounts {
   rto: number
   cancelled: number
   all: number
+  test_orders: number
 }
 
 export function computeTabCounts(filters: Omit<OrderFilters, 'tab'> = {}): TabCounts {
@@ -128,6 +130,12 @@ export function computeTabCounts(filters: Omit<OrderFilters, 'tab'> = {}): TabCo
     rto: 0,
     cancelled: 0,
     all: 0,
+    test_orders: 0,
+  }
+
+  // Count test orders directly from memory cache
+  if (cachedOrders) {
+    counts.test_orders = cachedOrders.filter(o => o.is_test_order === true).length
   }
 
   const list = getCachedOrdersFiltered({ ...filters, tab: 'all' })
@@ -179,9 +187,16 @@ export function getCachedOrdersFiltered(filters: OrderFilters): any[] {
 
   let list = cachedOrders
 
-  // 1. Tab Filtering
+  // Filter test orders first
   const tab = filters.tab || 'all'
-  if (tab !== 'all') {
+  if (tab === 'test_orders') {
+    list = list.filter(o => o.is_test_order === true)
+  } else {
+    list = list.filter(o => o.is_test_order !== true)
+  }
+
+  // 1. Tab Filtering
+  if (tab !== 'all' && tab !== 'test_orders') {
     const now = Date.now()
     list = list.filter((o) => {
       const isCancelled = isOrderCancelled(o)
@@ -407,4 +422,19 @@ export function addOrderToCache(order: any) {
     cachedOrders = [order]
   }
 }
+
+export function toggleTestOrderInCache(id: string | number, isTest: boolean) {
+  if (cachedOrders) {
+    cachedOrders = cachedOrders.map(o => {
+      if (String(o.id) === String(id)) {
+        return {
+          ...o,
+          is_test_order: isTest
+        }
+      }
+      return o
+    })
+  }
+}
+
 

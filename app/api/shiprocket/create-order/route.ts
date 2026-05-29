@@ -33,12 +33,45 @@ export async function POST(req: NextRequest) {
       }
     } catch {}
 
-    const data = await createShiprocketAdhocOrder(body)
-    if (data.status_code === 0) {
-      return NextResponse.json(
-        { error: data.message || 'Shiprocket order creation failed', details: data },
-        { status: 400 }
-      )
+    const isTest = Boolean(body.is_test_order)
+
+    let data;
+    if (isTest) {
+      // Mock Shiprocket order creation to prevent external charges/fulfillment processes
+      const mockId = Math.floor(10000000 + Math.random() * 90000000)
+      data = {
+        status: 'success',
+        order_id: mockId,
+        shipment_id: Math.floor(10000000 + Math.random() * 90000000),
+        status_code: 1,
+        message: 'Mock Shiprocket order created for testing purposes'
+      }
+
+      // Save to Firestore test_orders collection
+      try {
+        const { markOrderAsTest } = require('@/src/services/firestore.service')
+        const ipAddress = req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || (req as any).ip || '127.0.0.1'
+        const userAgent = req.headers.get('user-agent') || 'Unknown'
+        const { parseUserAgent } = require('@/src/utils/userAgentParser')
+        const parsedUA = parseUserAgent(userAgent)
+        const device = parsedUA.device || 'Unknown'
+
+        await markOrderAsTest(String(data.order_id), true, {
+          markedBy: auditEmail,
+          ip: ipAddress,
+          device: device
+        })
+      } catch (e) {
+        console.error('⚠️ Failed to save test order to Firestore:', e)
+      }
+    } else {
+      data = await createShiprocketAdhocOrder(body)
+      if (data.status_code === 0) {
+        return NextResponse.json(
+          { error: data.message || 'Shiprocket order creation failed', details: data },
+          { status: 400 }
+        )
+      }
     }
 
     // Success! Update the server-side memory cache with the new Shiprocket order
@@ -50,6 +83,7 @@ export async function POST(req: NextRequest) {
       
       const formattedCustomOrder = {
         id: data.order_id || Math.floor(1000000 + Math.random() * 9000000),
+        is_test_order: isTest,
         name: body.order_id ? (body.order_id.startsWith('#') ? body.order_id : '#' + body.order_id) : `#SR-${data.order_id}`,
         created_at: body.order_date ? new Date(body.order_date).toISOString() : new Date().toISOString(),
         financial_status: isCod ? 'pending' : 'paid',
@@ -96,6 +130,7 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       console.error('⚠️ Failed to add cloned order to cache:', e)
     }
+
 
     // Fire-and-forget audit log for order creation
     try {

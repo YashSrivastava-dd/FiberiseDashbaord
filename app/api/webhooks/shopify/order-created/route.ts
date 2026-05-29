@@ -95,6 +95,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Check if Shopify test order
+    const isTestOrder = orderData.test === true;
+    if (isTestOrder) {
+      console.log(`🧪 Shopify Order ${orderData.name || orderData.id} is a test order — skipping WhatsApp journey and registering in Firestore`);
+      
+      // Save as a test order in Firestore
+      try {
+        const { markOrderAsTest } = require('@/src/services/firestore.service');
+        const ipAddress = req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || (req as any).ip || '127.0.0.1';
+        await markOrderAsTest(String(orderData.id), true, {
+          markedBy: 'shopify_webhook',
+          ip: ipAddress,
+          device: 'Shopify Webhook'
+        });
+      } catch (e) {
+        console.error('Failed to automatically mark Shopify test order in DB:', e);
+      }
+
+      return NextResponse.json(
+        { status: 'skipped', reason: 'test_order' },
+        { status: 200 }
+      );
+    }
+
+
     // Extract product names
     const products = (orderData.line_items || []).map(
       (item: any) => item.title || item.name || 'Product'

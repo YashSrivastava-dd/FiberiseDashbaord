@@ -18,6 +18,7 @@ import {
   EyeOff,
   ShieldAlert,
   Award,
+  Sparkles,
   Compass,
   ArrowLeftRight,
   CheckCircle2,
@@ -152,7 +153,7 @@ export default function ShiprocketDashboardPage() {
   const router = useRouter()
   
   // Tab states
-  const [currentTab, setCurrentTab] = useState<'new' | 'ready_to_ship' | 'pickups_manifests' | 'in_transit' | 'delivered' | 'rto' | 'cancelled' | 'all'>('new')
+  const [currentTab, setCurrentTab] = useState<'new' | 'ready_to_ship' | 'pickups_manifests' | 'in_transit' | 'delivered' | 'rto' | 'cancelled' | 'all' | 'test_orders'>('new')
   const [manifestSubtab, setManifestSubtab] = useState<'pickup_ids' | 'manifests'>('pickup_ids')
 
   // Pagination State (server-side)
@@ -162,7 +163,7 @@ export default function ShiprocketDashboardPage() {
   const [totalPages, setTotalPages] = useState<number>(1)
   const [serverTabCounts, setServerTabCounts] = useState<Record<string, number>>({
     new: 0, ready_to_ship: 0, pickups_manifests: 0, in_transit: 0,
-    delivered: 0, rto: 0, cancelled: 0, all: 0
+    delivered: 0, rto: 0, cancelled: 0, all: 0, test_orders: 0
   })
   const [pageLoading, setPageLoading] = useState<boolean>(false)
   const [syncing, setSyncing] = useState<boolean>(false)
@@ -672,6 +673,52 @@ export default function ShiprocketDashboardPage() {
     setTimeout(() => setActionMessage(null), 5000)
   }
 
+  // ── Toggle Test Order ──
+  const [togglingTestOrderId, setTogglingTestOrderId] = useState<number | null>(null)
+
+  const handleToggleTestOrder = async (order: ShopifyOrder) => {
+    const isTest = !(order as any).is_test_order
+    const message = isTest
+      ? `Are you sure you want to mark order ${order.name} as a TEST order? This will move it to the Test Orders tab and exclude it from all sales analytics and reports.`
+      : `Are you sure you want to remove the test status from order ${order.name}? This will move it back to real orders and include its metrics in all sales analytics.`
+
+    if (!window.confirm(message)) return
+
+    try {
+      setTogglingTestOrderId(order.id)
+      const res = await fetch(`/api/shopify/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_test_order: isTest })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to toggle test status')
+
+      // Update in local state
+      setOrders((prev) => prev.map((o) => {
+        if (o.id === order.id) {
+          return {
+            ...o,
+            is_test_order: isTest
+          }
+        }
+        return o
+      }))
+
+      // Update drawer if currently open
+      if (activeDetailOrder && activeDetailOrder.id === order.id) {
+        setActiveDetailOrder((prev) => prev ? { ...prev, is_test_order: isTest } : null)
+      }
+
+      invalidatePageCache()
+      triggerNotification('success', isTest ? 'Order marked as test order successfully.' : 'Test order status removed successfully.')
+    } catch (err: any) {
+      triggerNotification('error', err.message || 'Error toggling test status.')
+    } finally {
+      setTogglingTestOrderId(null)
+    }
+  }
+
   // ── Cancel Order ──
   const [deletingOrderId, setDeletingOrderId] = useState<number | null>(null)
 
@@ -746,6 +793,67 @@ export default function ShiprocketDashboardPage() {
       triggerNotification('error', err.message || 'Error bulk cancelling orders.')
     } finally {
       setBulkDeleting(false)
+    }
+  }
+
+  const [bulkTestToggling, setBulkTestToggling] = useState(false)
+
+  const handleBulkToggleTest = async (isTest: boolean) => {
+    const selectedIds = Object.keys(selectedOrders)
+      .map(Number)
+      .filter((id) => selectedOrders[id])
+
+    if (selectedIds.length === 0) return
+
+    const message = isTest
+      ? `Are you sure you want to mark the ${selectedIds.length} selected orders as TEST orders?`
+      : `Are you sure you want to remove test status from the ${selectedIds.length} selected orders?`
+
+    if (!window.confirm(message)) return
+
+    try {
+      setBulkTestToggling(true)
+      const results = await Promise.allSettled(
+        selectedIds.map(async (id) => {
+          const res = await fetch(`/api/shopify/orders/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_test_order: isTest }),
+          })
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            throw new Error(data.error || `Failed for order ${id}`)
+          }
+          return id
+        })
+      )
+
+      const successfulIds = results
+        .filter((r) => r.status === 'fulfilled')
+        .map((r: any) => Number(r.value))
+
+      setOrders((prev) =>
+        prev.map((o) => {
+          if (successfulIds.includes(Number(o.id))) {
+            return {
+              ...o,
+              is_test_order: isTest,
+            }
+          }
+          return o
+        })
+      )
+
+      setSelectedOrders({})
+      invalidatePageCache()
+      triggerNotification(
+        'success',
+        `Successfully updated test status for ${successfulIds.length} orders.`
+      )
+    } catch (err: any) {
+      triggerNotification('error', err.message || 'Error bulk updating test status.')
+    } finally {
+      setBulkTestToggling(false)
     }
   }
 
@@ -1179,7 +1287,7 @@ export default function ShiprocketDashboardPage() {
 
           {/* ── Shiprocket Tabs Navigation Bar ── */}
           <div className="border-b border-white/10 mb-6 flex overflow-x-auto scrollbar-none gap-2">
-            {(['new', 'ready_to_ship', 'pickups_manifests', 'in_transit', 'delivered', 'rto', 'cancelled', 'all'] as const).map((tab) => {
+            {(['new', 'ready_to_ship', 'pickups_manifests', 'in_transit', 'delivered', 'rto', 'cancelled', 'all', 'test_orders'] as const).map((tab) => {
               const isActive = currentTab === tab
               const count = tab === 'pickups_manifests' ? manifests.length : (serverTabCounts[tab] ?? 0)
               const tabLabels = {
@@ -1190,7 +1298,8 @@ export default function ShiprocketDashboardPage() {
                 delivered: 'Delivered',
                 rto: 'RTO',
                 cancelled: 'Cancelled',
-                all: 'All'
+                all: 'All',
+                test_orders: 'Test Orders'
               }
 
               return (
@@ -1281,6 +1390,25 @@ export default function ShiprocketDashboardPage() {
                   >
                     {bulkDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" /> : <Trash2 className="w-3.5 h-3.5 text-red-400" />}
                     {bulkDeleting ? 'Cancelling...' : 'Cancel Selected'}
+                  </button>
+                )}
+                {currentTab === 'test_orders' ? (
+                  <button
+                    onClick={() => handleBulkToggleTest(false)}
+                    disabled={bulkTestToggling}
+                    className="px-4 py-2 rounded-xl bg-[#854d0e]/20 hover:bg-[#854d0e]/30 border border-amber-500/30 text-xs font-bold text-amber-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                  >
+                    {bulkTestToggling ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" /> : <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
+                    {bulkTestToggling ? 'Removing...' : 'Unmark Selected'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleBulkToggleTest(true)}
+                    disabled={bulkTestToggling}
+                    className="px-4 py-2 rounded-xl bg-purple-950/40 hover:bg-purple-950/60 border border-purple-500/30 text-xs font-bold text-purple-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                  >
+                    {bulkTestToggling ? <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" /> : <Sparkles className="w-3.5 h-3.5 text-purple-400" />}
+                    {bulkTestToggling ? 'Marking...' : 'Mark Selected as Test'}
                   </button>
                 )}
                 <button
@@ -1490,7 +1618,7 @@ export default function ShiprocketDashboardPage() {
                         </>
                       )}
 
-                      {currentTab === 'all' && (
+                      {(currentTab === 'all' || currentTab === 'test_orders') && (
                         <>
                           <th className="px-6 py-4 min-w-[140px] text-left">Order</th>
                           <th className="px-6 py-4 min-w-[200px] text-left">Customer</th>
@@ -2165,15 +2293,16 @@ export default function ShiprocketDashboardPage() {
                             )}
 
                             {/* ── ALL ORDERS TAB ── */}
-                            {currentTab === 'all' && (
+                            {(currentTab === 'all' || currentTab === 'test_orders') && (
                               <>
                                 <td className="px-6 py-3 text-white">
                                   <div className="flex flex-col font-medium">
                                     <span
                                       onClick={(e) => { e.stopPropagation(); setActiveDetailOrder(order); }}
-                                      className="font-bold text-purple-300 hover:text-purple-200 cursor-pointer"
+                                      className="font-bold text-purple-300 hover:text-purple-200 cursor-pointer flex items-center gap-1.5"
                                     >
                                       {order.name}
+                                      {(order as any).is_test_order && <Badge label="TEST" variant="red" />}
                                     </span>
                                     <span className="text-xs text-white/50 font-normal">ID: {order.id}</span>
                                   </div>
@@ -2559,7 +2688,10 @@ export default function ShiprocketDashboardPage() {
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-xl font-extrabold text-white">{activeDetailOrder.name}</h3>
+                  <h3 className="text-xl font-extrabold text-white flex items-center gap-2">
+                    {activeDetailOrder.name}
+                    {(activeDetailOrder as any).is_test_order && <Badge label="TEST ORDER" variant="red" />}
+                  </h3>
                   <Badge label={activeDetailOrder.financial_status} variant={statusVariant(activeDetailOrder.financial_status)} />
                   <Badge label={activeDetailOrder.fulfillment_status ?? 'Unfulfilled'} variant={statusVariant(activeDetailOrder.fulfillment_status)} />
                 </div>
@@ -2735,17 +2867,55 @@ export default function ShiprocketDashboardPage() {
             {/* Bottom Actions */}
             <div className="mt-8 pt-4 border-t border-white/10 flex flex-col gap-3 shrink-0">
               {!isOrderCancelled(activeDetailOrder) && (
+                <div className="flex gap-2.5">
+                  <button
+                    onClick={() => handleDeleteOrder(activeDetailOrder.id)}
+                    disabled={deletingOrderId === activeDetailOrder.id}
+                    className="flex-1 py-2.5 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-extrabold text-red-400 text-center transition-all shadow-lg shadow-red-900/10 active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {deletingOrderId === activeDetailOrder.id ? (
+                      <Loader2 className="w-4.5 h-4.5 animate-spin text-red-400" />
+                    ) : (
+                      <Trash2 className="w-4 h-4 text-red-400" />
+                    )}
+                    {deletingOrderId === activeDetailOrder.id ? 'Cancelling...' : 'Cancel Order'}
+                  </button>
+
+                  <button
+                    onClick={() => handleToggleTestOrder(activeDetailOrder)}
+                    disabled={togglingTestOrderId === activeDetailOrder.id}
+                    className={`flex-1 py-2.5 rounded-xl border text-xs font-extrabold text-center transition-all active:scale-95 flex items-center justify-center gap-1.5 ${
+                      (activeDetailOrder as any).is_test_order
+                        ? 'bg-[#854d0e]/20 hover:bg-[#854d0e]/30 border-amber-500/30 text-amber-400'
+                        : 'bg-purple-950/40 hover:bg-purple-950/60 border-purple-500/30 text-purple-400'
+                    }`}
+                  >
+                    {togglingTestOrderId === activeDetailOrder.id ? (
+                      <Loader2 className="w-4.5 h-4.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4" />
+                    )}
+                    {(activeDetailOrder as any).is_test_order ? 'Unmark Test' : 'Mark as Test'}
+                  </button>
+                </div>
+              )}
+
+              {isOrderCancelled(activeDetailOrder) && (
                 <button
-                  onClick={() => handleDeleteOrder(activeDetailOrder.id)}
-                  disabled={deletingOrderId === activeDetailOrder.id}
-                  className="w-full py-2.5 rounded-xl bg-red-950/40 hover:bg-red-950/60 border border-red-500/30 text-xs font-extrabold text-red-400 text-center transition-all shadow-lg shadow-red-900/10 active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => handleToggleTestOrder(activeDetailOrder)}
+                  disabled={togglingTestOrderId === activeDetailOrder.id}
+                  className={`w-full py-2.5 rounded-xl border text-xs font-extrabold text-center transition-all active:scale-95 flex items-center justify-center gap-1.5 ${
+                    (activeDetailOrder as any).is_test_order
+                      ? 'bg-[#854d0e]/20 hover:bg-[#854d0e]/30 border-amber-500/30 text-amber-400'
+                      : 'bg-purple-950/40 hover:bg-purple-950/60 border-purple-500/30 text-purple-400'
+                  }`}
                 >
-                  {deletingOrderId === activeDetailOrder.id ? (
-                    <Loader2 className="w-4.5 h-4.5 animate-spin text-red-400" />
+                  {togglingTestOrderId === activeDetailOrder.id ? (
+                    <Loader2 className="w-4.5 h-4.5 animate-spin" />
                   ) : (
-                    <Trash2 className="w-4 h-4 text-red-400" />
+                    <Sparkles className="w-4 h-4" />
                   )}
-                  {deletingOrderId === activeDetailOrder.id ? 'Cancelling Order...' : 'Cancel Order'}
+                  {(activeDetailOrder as any).is_test_order ? 'Remove Test Order Status' : 'Mark as Test Order'}
                 </button>
               )}
 

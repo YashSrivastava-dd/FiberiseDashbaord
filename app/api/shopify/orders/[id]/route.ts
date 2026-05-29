@@ -116,3 +116,89 @@ export async function DELETE(
     )
   }
 }
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params
+    const body = await req.json().catch(() => null)
+    
+    if (body?.is_test_order === undefined) {
+      return NextResponse.json({ error: 'Missing is_test_order field in body' }, { status: 400 })
+    }
+
+    const isTest = Boolean(body.is_test_order)
+
+    // Extract session for audit attribution
+    let auditEmail = 'unknown'
+    let auditRole = 'unknown'
+    let auditSessionId = ''
+    try {
+      const { decryptSession } = require('@/src/services/auth')
+      const sessionCookie = req.cookies.get('fiberise_session')?.value
+      if (sessionCookie) {
+        const session = decryptSession(sessionCookie)
+        if (session) {
+          auditEmail = session.email || 'unknown'
+          auditRole = session.role || 'unknown'
+          auditSessionId = session.sessionId || ''
+        }
+      }
+    } catch {}
+
+    // Save to Firestore
+    const { markOrderAsTest } = require('@/src/services/firestore.service')
+    
+    // Extract network info
+    const ipAddress = req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0] || (req as any).ip || '127.0.0.1'
+    const userAgent = req.headers.get('user-agent') || 'Unknown'
+    const { parseUserAgent } = require('@/src/utils/userAgentParser')
+    const parsedUA = parseUserAgent(userAgent)
+    const device = parsedUA.device || 'Unknown'
+
+    await markOrderAsTest(id, isTest, {
+      markedBy: auditEmail,
+      ip: ipAddress,
+      device: device
+    })
+
+    // Update in-memory cache directly
+    const { toggleTestOrderInCache, getCachedOrderById } = require('@/src/services/ordersCache')
+    toggleTestOrderInCache(id, isTest)
+
+    const cachedOrder = getCachedOrderById(id)
+    const orderName = cachedOrder?.name || `#${id}`
+
+    // Log to audit logs (fire-and-forget)
+    try {
+      const { logAction } = require('@/src/services/auditLogService')
+      logAction({
+        userId: auditEmail,
+        userEmail: auditEmail,
+        userRole: auditRole,
+        sessionId: auditSessionId,
+        actionType: isTest ? 'TEST_ORDER_MARK' : 'TEST_ORDER_UNMARK',
+        description: isTest 
+          ? `Marked order ${orderName} as Test Order` 
+          : `Removed Test Order status from ${orderName}`,
+        module: 'orders',
+        status: 'success',
+        details: { orderId: id, orderName, isTest },
+        req,
+      })
+    } catch (e) {
+      console.error('Failed to write toggle test order audit log:', e)
+    }
+
+    return NextResponse.json({ success: true, is_test_order: isTest }, { status: 200 })
+  } catch (error: any) {
+    console.error('Error toggling test order:', error)
+    return NextResponse.json(
+      { error: error.message || 'Failed to toggle test order' },
+      { status: 500 },
+    )
+  }
+}
+

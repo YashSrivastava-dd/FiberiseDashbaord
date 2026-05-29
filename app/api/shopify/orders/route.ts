@@ -170,8 +170,16 @@ export async function GET(_req: NextRequest) {
 
       const syncPromise = Promise.all([
         fetchAllShopifyOrders(),
-        getAllShiprocketOrders()
-      ]).then(([shopifyOrders, shiprocketOrders]) => {
+        getAllShiprocketOrders(),
+        (() => {
+          try {
+            const { getAllTestOrderIds } = require('@/src/services/firestore.service')
+            return getAllTestOrderIds()
+          } catch {
+            return new Set<string>()
+          }
+        })()
+      ]).then(([shopifyOrders, shiprocketOrders, testOrderIds]) => {
         setActiveFetchPromise(null)
 
         // Map Shopify orders for rapid deduplication lookup
@@ -345,12 +353,21 @@ export async function GET(_req: NextRequest) {
           }
         }
 
-        setCachedOrders(combinedOrders, Date.now() + CACHE_TTL_MS)
+        // Enrich combined orders with test status
+        const enrichedOrders = combinedOrders.map((o: any) => {
+          const isTest = o.test === true || testOrderIds.has(String(o.id));
+          return {
+            ...o,
+            is_test_order: isTest
+          };
+        });
+
+        setCachedOrders(enrichedOrders, Date.now() + CACHE_TTL_MS)
 
         // Proactively scan for RTO email alerts
         try {
           const { shootRtoEmailAlert } = require('@/src/services/emailService')
-          combinedOrders.forEach((order) => {
+          enrichedOrders.forEach((order) => {
             const isRto = order.fulfillment_status === 'fulfilled' && 
                           ['failure', 'rto', 'returned'].includes((order.fulfillments?.[0]?.shipment_status || '').toLowerCase())
             if (isRto) {

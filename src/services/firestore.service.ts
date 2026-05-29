@@ -386,3 +386,62 @@ export async function getAnalytics(): Promise<{
     journeyCompletionRate: totalJourneys > 0 ? Math.round((completed / totalJourneys) * 100) : 0,
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEST ORDERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface TestOrderMetadata {
+  orderId: string;
+  isTestOrder: boolean;
+  markedBy: string;
+  markedAt: admin.firestore.Timestamp | any;
+  ip: string;
+  device: string;
+}
+
+/**
+ * Mark or unmark an order as a test order in the test_orders collection.
+ */
+export async function markOrderAsTest(
+  orderId: string,
+  isTest: boolean,
+  audit: { markedBy: string; ip: string; device: string }
+): Promise<void> {
+  const db = getDb();
+  const docRef = db.collection('test_orders').doc(String(orderId));
+
+  if (isTest) {
+    await docRef.set({
+      orderId: String(orderId),
+      isTestOrder: true,
+      markedBy: audit.markedBy,
+      markedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ip: audit.ip,
+      device: audit.device,
+    });
+    console.log(`🧪 Order ${orderId} marked as Test Order by ${audit.markedBy}`);
+  } else {
+    await docRef.delete();
+    console.log(`🔓 Test Order status removed from order ${orderId} by ${audit.markedBy}`);
+  }
+}
+
+/**
+ * Retrieve a Set of all test order IDs from the database.
+ */
+export async function getAllTestOrderIds(): Promise<Set<string>> {
+  try {
+    const db = getDb();
+    const snapshot = await db.collection('test_orders').get();
+    const ids = new Set<string>();
+    snapshot.forEach((doc) => {
+      ids.add(doc.id);
+    });
+    return ids;
+  } catch (error) {
+    console.error('❌ Failed to retrieve test order IDs:', error);
+    return new Set<string>();
+  }
+}
+

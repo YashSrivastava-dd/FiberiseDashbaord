@@ -147,6 +147,15 @@ export async function processAllJourneys(): Promise<{
     return stats;
   }
 
+  // Fetch test order IDs to exclude notifications for test orders
+  let testOrderIds = new Set<string>();
+  try {
+    const { getAllTestOrderIds } = require('./firestore.service');
+    testOrderIds = await getAllTestOrderIds();
+  } catch (err) {
+    console.error('⚠️ Failed to load test order IDs in scheduler:', err);
+  }
+
   console.log(`📋 Found ${journeys.length} active journeys`);
 
   // Get all active templates to know the max day
@@ -161,6 +170,14 @@ export async function processAllJourneys(): Promise<{
     stats.processed++;
 
     try {
+      // Prevent customer notifications if order is marked as a test order
+      if (testOrderIds.has(String(journey.orderId))) {
+        console.log(`🧪 Journey ${journey.id} belongs to Test Order ${journey.orderId} — automatically completing journey without notifications`);
+        await updateJourneyStatus(journey.id, 'completed');
+        stats.completed++;
+        continue;
+      }
+
       // Calculate days elapsed since order
       const orderDate = journey.orderDate.toDate();
       const now = new Date();

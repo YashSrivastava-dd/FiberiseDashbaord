@@ -58,6 +58,7 @@ export default function ShiprocketCreateOrderPage() {
     breadth: '',
     height: '',
     weight: '',
+    is_test_order: false,
   })
   const [orderItems, setOrderItems] = useState<OrderItem[]>([defaultItem])
   const starterPackDimensions = {
@@ -349,6 +350,19 @@ export default function ShiprocketCreateOrderPage() {
                 <input className={inputClassName} type="number" value={form.height} onChange={(e) => setField('height', e.target.value)} placeholder="Height (cm)" required />
                 <input className={inputClassName} type="number" value={subTotal} placeholder="Sub Total" readOnly />
               </div>
+            </div>
+
+            <div className={sectionClassName}>
+              <p className="text-white text-sm font-semibold mb-3">Order Classification</p>
+              <label className="inline-flex items-center gap-2.5 text-xs text-white/70 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.is_test_order}
+                  onChange={(e) => setField('is_test_order', e.target.checked)}
+                  className="rounded border-white/20 bg-white/10 text-purple-600 focus:ring-0 focus:ring-offset-0"
+                />
+                Mark as Test Order (prevents real Shiprocket booking & hides from Sales Dashboard)
+              </label>
             </div>
 
             <button
